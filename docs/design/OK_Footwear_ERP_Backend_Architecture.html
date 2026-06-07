@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>OK Footwear ERP — Backend Architecture</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px; }
+  h1 { color: #1F4E79; font-size: 20px; margin-bottom: 4px; }
+  p.sub { color: #595959; font-size: 13px; margin-bottom: 16px; }
+  .wrap { background: #fff; border-radius: 12px; padding: 20px; box-shadow: 0 2px 12px rgba(0,0,0,.08); max-width: 880px; margin: 0 auto; }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; font-size: 12px; }
+  .leg { display: flex; align-items: center; gap: 6px; }
+  .dot { width: 12px; height: 12px; border-radius: 3px; }
+  svg { width: 100%; height: auto; }
+  .node { cursor: pointer; }
+  .node rect, .node path { transition: opacity .15s; }
+  .node:hover rect, .node:hover path { opacity: 0.82; }
+  /* colour classes */
+  .c-gray rect  { fill:#F2F2F2; stroke:#AAAAAA; }
+  .c-gray text  { fill:#333; }
+  .c-teal rect  { fill:#E0F2F1; stroke:#0D6B6B; }
+  .c-teal text  { fill:#0D4040; }
+  .c-blue rect  { fill:#D6E4F0; stroke:#2E75B6; }
+  .c-blue text  { fill:#1F4E79; }
+  .c-purple rect{ fill:#F3E5F5; stroke:#7B2FBE; }
+  .c-purple text{ fill:#4A1580; }
+  .c-amber rect { fill:#FFF3CD; stroke:#E6A800; }
+  .c-amber text { fill:#7B5000; }
+  .c-green rect { fill:#E2EFDA; stroke:#4CAF50; }
+  .c-green text { fill:#1B5E20; }
+  .c-coral rect { fill:#FCE4EC; stroke:#E91E63; }
+  .c-coral text { fill:#880E4F; }
+  .arr { stroke: #666; fill: none; }
+  .th { font-size: 13px; font-weight: bold; }
+  .ts { font-size: 11px; }
+  #tooltip {
+    position: fixed; background: #1F4E79; color: #fff;
+    padding: 6px 12px; border-radius: 6px; font-size: 12px;
+    pointer-events: none; display: none; z-index: 99;
+    max-width: 260px; line-height: 1.4;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>OK Footwear ERP — High-Level Backend Architecture</h1>
+  <p class="sub">Modular Monolith · NestJS + TypeScript · PostgreSQL 16 · Redis 7 · S3/MinIO · BullMQ</p>
+  <div class="legend">
+    <div class="leg"><div class="dot" style="background:#D6E4F0;border:1px solid #2E75B6"></div> HTTP layer</div>
+    <div class="leg"><div class="dot" style="background:#F3E5F5;border:1px solid #7B2FBE"></div> Business modules</div>
+    <div class="leg"><div class="dot" style="background:#E0F2F1;border:1px solid #0D6B6B"></div> Shared kernel</div>
+    <div class="leg"><div class="dot" style="background:#FFF3CD;border:1px solid #E6A800"></div> Background jobs</div>
+    <div class="leg"><div class="dot" style="background:#E2EFDA;border:1px solid #4CAF50"></div> Data stores</div>
+    <div class="leg"><div class="dot" style="background:#FCE4EC;border:1px solid #E91E63"></div> External integrations</div>
+  </div>
+
+<svg viewBox="0 0 820 655" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="#888" stroke-width="1.5" stroke-linecap="round"/>
+  </marker>
+  <marker id="ar-dash" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="#bbb" stroke-width="1.5" stroke-linecap="round"/>
+  </marker>
+</defs>
+
+<!-- side labels -->
+<text class="ts" x="7" y="50" text-anchor="middle" font-size="9" fill="#aaa" transform="rotate(-90,7,50)">Client</text>
+<text class="ts" x="7" y="106" text-anchor="middle" font-size="9" fill="#aaa" transform="rotate(-90,7,106)">Edge</text>
+<text class="ts" x="7" y="318" text-anchor="middle" font-size="9" fill="#aaa" transform="rotate(-90,7,318)">App</text>
+<text class="ts" x="7" y="521" text-anchor="middle" font-size="9" fill="#aaa" transform="rotate(-90,7,521)">Data</text>
+<text class="ts" x="7" y="607" text-anchor="middle" font-size="9" fill="#aaa" transform="rotate(-90,7,607)">External</text>
+
+<!-- ── CLIENT LAYER ──────────────────────────────────────────────────── -->
+<g class="node c-gray" data-tip="Web browser: React 18 SPA served from Nginx. Supports Chrome, Edge, Firefox 110+.">
+  <rect x="20" y="20" width="240" height="52" rx="8" stroke-width="0.6"/>
+  <text class="th" x="140" y="42" text-anchor="middle" dominant-baseline="central">Web browser</text>
+  <text class="ts" x="140" y="60" text-anchor="middle">Chrome · Edge · Firefox</text>
+</g>
+<g class="node c-gray" data-tip="Factory tablet: Touch-optimised React PWA with large tap targets (≥48px). Simplified UI for low-literacy factory operators.">
+  <rect x="290" y="20" width="240" height="52" rx="8" stroke-width="0.6"/>
+  <text class="th" x="410" y="42" text-anchor="middle" dominant-baseline="central">Factory tablet</text>
+  <text class="ts" x="410" y="60" text-anchor="middle">Touch-optimised · React PWA</text>
+</g>
+<g class="node c-gray" data-tip="Mobile ESS portal: Progressive Web App for employee self-service. Works on iOS 15+ and Android 10+ without a native app install.">
+  <rect x="560" y="20" width="240" height="52" rx="8" stroke-width="0.6"/>
+  <text class="th" x="680" y="42" text-anchor="middle" dominant-baseline="central">Mobile ESS portal</text>
+  <text class="ts" x="680" y="60" text-anchor="middle">iOS · Android browser · PWA</text>
+</g>
+
+<!-- arrows client → nginx -->
+<line x1="140" y1="72" x2="140" y2="84" stroke="#999" stroke-width="1.2" marker-end="url(#ar)"/>
+<line x1="410" y1="72" x2="410" y2="84" stroke="#999" stroke-width="1.5" marker-end="url(#ar)"/>
+<line x1="680" y1="72" x2="680" y2="84" stroke="#999" stroke-width="1.2" marker-end="url(#ar)"/>
+<text class="ts" x="418" y="81" fill="#aaa" font-size="10">HTTPS / TLS 1.3</text>
+
+<!-- ── NGINX ──────────────────────────────────────────────────────────── -->
+<g class="node c-teal" data-tip="Nginx: SSL/TLS termination (Let's Encrypt / ACM), HTTP→HTTPS redirect, reverse proxy to NestJS on port 3000, rate limiting (100 req/min per IP), gzip compression, static React build serving.">
+  <rect x="20" y="86" width="780" height="38" rx="8" stroke-width="0.6"/>
+  <text class="th" x="410" y="105" text-anchor="middle" dominant-baseline="central">Nginx — SSL/TLS termination · Reverse proxy · Rate limiting · Gzip · Static file serving</text>
+</g>
+
+<!-- arrow nginx → monolith -->
+<line x1="410" y1="124" x2="410" y2="140" stroke="#999" stroke-width="1.5" marker-end="url(#ar)"/>
+<text class="ts" x="418" y="135" fill="#aaa" font-size="10">HTTP proxy :3000</text>
+
+<!-- ── MONOLITH CONTAINER ─────────────────────────────────────────────── -->
+<rect x="20" y="142" width="780" height="342" rx="12" fill="none" stroke="#2E75B6" stroke-width="2"/>
+<text font-family="Arial" font-size="10" font-weight="bold" fill="#2E75B6" x="36" y="157" opacity="0.8">NestJS Modular Monolith — Single Node.js process — TypeScript — express adapter</text>
+
+<!-- HTTP Pipeline -->
+<g class="node c-blue" data-tip="HTTP Pipeline: Every request passes through — (1) JWT Guard: validates Bearer token, extracts user+roles; (2) RBAC Guard: checks module+action permission; (3) Rate-limit Guard: enforces per-user limits via Redis; (4) Validation Pipe: class-validator DTOs; (5) Controller: routes to service; (6) Response Interceptor: wraps response in {data, meta}; (7) Exception Filter: maps errors to RFC 7807 problem+json.">
+  <rect x="36" y="162" width="748" height="30" rx="6" stroke-width="0.6"/>
+  <text class="th" x="410" y="177" text-anchor="middle" dominant-baseline="central">JWT Guard → RBAC Guard → Rate-limit Guard → Validation Pipe → Controller → Response Interceptor → Exception Filter</text>
+</g>
+
+<!-- Modules row 1 -->
+<g class="node c-purple" data-tip="Orders module: OrdersController, OrdersService, BuyersService, ArticlesService, QuotationsService, ComplaintsService, SamplesService. Fires OrderConfirmedEvent on confirmation; subscribes to ProductionCompletedEvent to update status.">
+  <rect x="36" y="202" width="178" height="50" rx="7" stroke-width="0.6"/>
+  <text class="th" x="125" y="221" text-anchor="middle" dominant-baseline="central">Orders</text>
+  <text class="ts" x="125" y="239" text-anchor="middle">Buyers · Quotes · Complaints</text>
+</g>
+<g class="node c-purple" data-tip="Procurement module: VendorsService, PurchaseOrdersService, GoodsReceiptService, TenderService. On GRN approval fires GrnApprovedEvent → Inventory module updates stock_balances. Three-way match enforced in VendorInvoicesService.">
+  <rect x="226" y="202" width="178" height="50" rx="7" stroke-width="0.6"/>
+  <text class="th" x="315" y="221" text-anchor="middle" dominant-baseline="central">Procurement</text>
+  <text class="ts" x="315" y="239" text-anchor="middle">PO · GRN · Vendors · Tender</text>
+</g>
+<g class="node c-purple" data-tip="Manufacturing module: BomService, ProductionOrdersService, DailyProductionService, QualityControlService, MachineService, LastsMouldsService, ScrapService. Production entries are locked nightly by a cron job.">
+  <rect x="416" y="202" width="178" height="50" rx="7" stroke-width="0.6"/>
+  <text class="th" x="505" y="221" text-anchor="middle" dominant-baseline="central">Manufacturing</text>
+  <text class="ts" x="505" y="239" text-anchor="middle">BOM · Production · QC</text>
+</g>
+<g class="node c-purple" data-tip="Inventory module: StockItemsService, WarehousesService, StockTransactionsService, StockCountsService. The stock_balances table is updated by PostgreSQL trigger; this module provides the query/reporting layer on top.">
+  <rect x="606" y="202" width="178" height="50" rx="7" stroke-width="0.6"/>
+  <text class="th" x="695" y="221" text-anchor="middle" dominant-baseline="central">Inventory</text>
+  <text class="ts" x="695" y="239" text-anchor="middle">Stock · Warehouses · Counts</text>
+</g>
+
+<!-- Modules row 2 -->
+<g class="node c-purple" data-tip="Finance module: GlService, FixedAssetsService, BudgetService, BankService, ImportLcService, ExportLcService, DeliveryChallansService, BuyerInvoicesService. GL entries are posted as system-generated journals by other modules via FinanceService.postJournal().">
+  <rect x="36" y="262" width="178" height="50" rx="7" stroke-width="0.6"/>
+  <text class="th" x="125" y="281" text-anchor="middle" dominant-baseline="central">Finance</text>
+  <text class="ts" x="125" y="299" text-anchor="middle">GL · Assets · Budget · LC</text>
+</g>
+<g class="node c-purple" data-tip="HR module: EmployeesService, PayrollService, LeaveService, AttendanceService, PfService, GratuityService, ExpenseService. PayrollService publishes PayrollDisbursedEvent → Finance module posts GL journal. Gratuity computed via hr.compute_gratuity() PostgreSQL function.">
+  <rect x="226" y="262" width="178" height="50" rx="7" stroke-width="0.6"/>
+  <text class="th" x="315" y="281" text-anchor="middle" dominant-baseline="central">HR &amp; Payroll</text>
+  <text class="ts" x="315" y="299" text-anchor="middle">Employees · Leave · Payroll</text>
+</g>
+<g class="node c-purple" data-tip="Board module: DirectorsService, ShareholdersService, BoardMeetingsService, ResolutionsService, AgmService, DividendsService, RelatedPartiesService. Resolutions are SHA-256 hashed on signing. Refreshes brd.current_shareholding materialized view after share transactions.">
+  <rect x="416" y="262" width="178" height="50" rx="7" stroke-width="0.6"/>
+  <text class="th" x="505" y="281" text-anchor="middle" dominant-baseline="central">Board</text>
+  <text class="ts" x="505" y="299" text-anchor="middle">Directors · Shares · AGM</text>
+</g>
+<g class="node c-purple" data-tip="System module: AuthService (JWT + TOTP 2FA), UsersService, RolesService, AuditService, NotificationsService, ComplianceService. AuditService intercepts all write operations and posts to sys.audit_logs. NotificationsService dispatches in-app, email, and SMS.">
+  <rect x="606" y="262" width="178" height="50" rx="7" stroke-width="0.6"/>
+  <text class="th" x="695" y="281" text-anchor="middle" dominant-baseline="central">System</text>
+  <text class="ts" x="695" y="299" text-anchor="middle">Auth · RBAC · Audit · Notif</text>
+</g>
+
+<!-- Shared kernel label + boxes -->
+<text font-family="Arial" font-size="9" fill="#555" x="36" y="322" opacity="0.75">Shared kernel — cross-cutting concerns injected into all modules</text>
+<g class="node c-teal" data-tip="Auth Service: Issues JWT access tokens (8h expiry) and refresh tokens (30d). Validates TOTP OTP for 2FA via otplib. RBAC enforced by loading user permissions from Redis cache (TTL 5min); cache invalidated on role change.">
+  <rect x="36" y="328" width="178" height="42" rx="6" stroke-width="0.6"/>
+  <text class="th" x="125" y="344" text-anchor="middle" dominant-baseline="central">Auth Service</text>
+  <text class="ts" x="125" y="360" text-anchor="middle">JWT · Argon2 · 2FA · RBAC</text>
+</g>
+<g class="node c-teal" data-tip="Event Bus: @nestjs/event-emitter for in-process synchronous events. Used for cross-module side effects: GrnApproved → stock update; PayrollDisbursed → GL post; OrderConfirmed → milestone generation. No network hop — pure function call.">
+  <rect x="226" y="328" width="178" height="42" rx="6" stroke-width="0.6"/>
+  <text class="th" x="315" y="344" text-anchor="middle" dominant-baseline="central">Event Bus</text>
+  <text class="ts" x="315" y="360" text-anchor="middle">@nestjs/event-emitter</text>
+</g>
+<g class="node c-teal" data-tip="Logger: nestjs-pino wraps Pino for structured JSON logging. Every request gets a correlation-id injected by middleware. Log levels: error/warn in production, debug in dev. Shipped to Grafana Loki via Promtail.">
+  <rect x="416" y="328" width="178" height="42" rx="6" stroke-width="0.6"/>
+  <text class="th" x="505" y="344" text-anchor="middle" dominant-baseline="central">Logger (Pino)</text>
+  <text class="ts" x="505" y="360" text-anchor="middle">nestjs-pino · Structured JSON</text>
+</g>
+<g class="node c-teal" data-tip="Config Service: @nestjs/config loads and validates env vars at startup using class-validator. All secrets (DB password, JWT secret, AES key, API keys) come from env vars. Never hardcoded.">
+  <rect x="606" y="328" width="178" height="42" rx="6" stroke-width="0.6"/>
+  <text class="th" x="695" y="344" text-anchor="middle" dominant-baseline="central">Config Service</text>
+  <text class="ts" x="695" y="360" text-anchor="middle">@nestjs/config · Env validation</text>
+</g>
+
+<!-- Background layer -->
+<text font-family="Arial" font-size="9" fill="#555" x="36" y="382" opacity="0.75">Background processing — async jobs that must not block the HTTP request cycle</text>
+<g class="node c-amber" data-tip="BullMQ Workers: Registered as @nestjs/bull processors in the same Node.js process. Queues: payroll-compute (up to 10min), pdf-generation (Puppeteer, up to 30s), email-dispatch (SES, retry x3), report-export (ExcelJS). Uses Redis as broker. Dead-letter queue for failed jobs.">
+  <rect x="36" y="388" width="240" height="42" rx="6" stroke-width="0.6"/>
+  <text class="th" x="156" y="404" text-anchor="middle" dominant-baseline="central">BullMQ workers</text>
+  <text class="ts" x="156" y="420" text-anchor="middle">Payroll · PDF · Email · Reports</text>
+</g>
+<g class="node c-amber" data-tip="Task Scheduler: @nestjs/schedule with cron jobs. Daily: payslip email batch, compliance expiry check, materialized view refresh, stock reorder alert scan. Monthly: gratuity accrual posting, leave carry-forward rollover. All jobs are idempotent.">
+  <rect x="288" y="388" width="240" height="42" rx="6" stroke-width="0.6"/>
+  <text class="th" x="408" y="404" text-anchor="middle" dominant-baseline="central">Task scheduler</text>
+  <text class="ts" x="408" y="420" text-anchor="middle">@nestjs/schedule · Daily crons</text>
+</g>
+<g class="node c-amber" data-tip="File Generator: Puppeteer (headless Chrome) renders HTML templates → PDF payslips, challans, board notices, export documents. ExcelJS generates .xlsx reports. Generated files are streamed to S3/MinIO; pre-signed URL returned to client. Never stored on disk.">
+  <rect x="540" y="388" width="244" height="42" rx="6" stroke-width="0.6"/>
+  <text class="th" x="662" y="404" text-anchor="middle" dominant-baseline="central">File generator</text>
+  <text class="ts" x="662" y="420" text-anchor="middle">Puppeteer PDF · ExcelJS · S3</text>
+</g>
+
+<!-- Prisma bar -->
+<g class="node c-green" data-tip="Prisma ORM v5: Type-safe database client generated from schema.prisma. Multi-schema preview enabled. Connection pool via PgBouncer (transaction mode, 20 connections). Migrations managed with prisma migrate deploy in CI/CD. Raw SQL used only for complex aggregations.">
+  <rect x="36" y="440" width="748" height="30" rx="6" stroke-width="0.6"/>
+  <text class="th" x="410" y="455" text-anchor="middle" dominant-baseline="central">Prisma ORM v5 — Type-safe queries — Connection pooling via PgBouncer — Managed migrations</text>
+</g>
+<!-- monolith bottom: 142+342=484 -->
+
+<!-- arrows monolith → data -->
+<line x1="140" y1="484" x2="140" y2="500" stroke="#4CAF50" stroke-width="1.5" marker-end="url(#ar)"/>
+<line x1="410" y1="484" x2="410" y2="500" stroke="#4CAF50" stroke-width="1.5" marker-end="url(#ar)"/>
+<line x1="680" y1="484" x2="680" y2="500" stroke="#4CAF50" stroke-width="1.5" marker-end="url(#ar)"/>
+<text font-family="Arial" font-size="9" fill="#888" x="60" y="495">SQL / Prisma</text>
+<text font-family="Arial" font-size="9" fill="#888" x="320" y="495">Bull / ioredis</text>
+<text font-family="Arial" font-size="9" fill="#888" x="594" y="495">AWS SDK / S3</text>
+
+<!-- ── DATA STORES ─────────────────────────────────────────────────────── -->
+<g class="node c-green" data-tip="PostgreSQL 16: 8 schemas (sys, ord, prc, mfg, inv, fin, hr, brd). PgBouncer in transaction mode for connection pooling. WAL archiving to S3. pg_trgm, pgcrypto, btree_gin extensions. Read replica for reporting queries. Daily vacuum + ANALYZE via pg_cron.">
+  <rect x="20" y="502" width="240" height="54" rx="8" stroke-width="0.6"/>
+  <text class="th" x="140" y="522" text-anchor="middle" dominant-baseline="central">PostgreSQL 16</text>
+  <text class="ts" x="140" y="540" text-anchor="middle">Primary RDBMS · 8 schemas · ACID</text>
+</g>
+<g class="node c-green" data-tip="Redis 7: Three logical databases — DB0: BullMQ job queues; DB1: session store (JWT blacklist, RBAC permission cache, rate-limit counters); DB2: application cache (stock summary, org chart, dropdown lists). Persistence: RDB snapshot every 15min + AOF. Maxmemory-policy: allkeys-lru.">
+  <rect x="290" y="502" width="240" height="54" rx="8" stroke-width="0.6"/>
+  <text class="th" x="410" y="522" text-anchor="middle" dominant-baseline="central">Redis 7</text>
+  <text class="ts" x="410" y="540" text-anchor="middle">Cache · Sessions · BullMQ broker</text>
+</g>
+<g class="node c-green" data-tip="S3 / MinIO: Buckets — erp-documents (HR files, board minutes, LC docs), erp-exports (PDF payslips, Excel reports), erp-receipts (expense receipt photos). Server-side encryption (SSE-S3). Pre-signed URLs for client download (15min TTL). Lifecycle: exports deleted after 30 days.">
+  <rect x="560" y="502" width="240" height="54" rx="8" stroke-width="0.6"/>
+  <text class="th" x="680" y="522" text-anchor="middle" dominant-baseline="central">S3 / MinIO</text>
+  <text class="ts" x="680" y="540" text-anchor="middle">Documents · Exports · Receipts</text>
+</g>
+
+<!-- dashed arrows to external -->
+<line x1="110" y1="556" x2="110" y2="574" stroke="#ccc" stroke-width="1.1" stroke-dasharray="4 3" marker-end="url(#ar-dash)"/>
+<line x1="310" y1="556" x2="310" y2="574" stroke="#ccc" stroke-width="1.1" stroke-dasharray="4 3" marker-end="url(#ar-dash)"/>
+<line x1="510" y1="556" x2="510" y2="574" stroke="#ccc" stroke-width="1.1" stroke-dasharray="4 3" marker-end="url(#ar-dash)"/>
+<line x1="710" y1="556" x2="710" y2="574" stroke="#ccc" stroke-width="1.1" stroke-dasharray="4 3" marker-end="url(#ar-dash)"/>
+<text font-family="Arial" font-size="9" fill="#bbb" x="410" y="568" text-anchor="middle">outbound REST / SDK calls from application layer</text>
+
+<!-- ── EXTERNAL INTEGRATIONS ──────────────────────────────────────────── -->
+<g class="node c-coral" data-tip="Bank API: Generates ACH/NEFT salary disbursement files in bank-specific format (configurable per bank). File exported from PayrollService on disbursement approval. BRAC Bank / Dutch-Bangla Bank. No real-time API call — file-based integration.">
+  <rect x="20" y="576" width="180" height="52" rx="8" stroke-width="0.6"/>
+  <text class="th" x="110" y="596" text-anchor="middle" dominant-baseline="central">Bank API</text>
+  <text class="ts" x="110" y="614" text-anchor="middle">ACH salary disbursement</text>
+</g>
+<g class="node c-coral" data-tip="SMS + Email: SMS via SSL Wireless (Bangladesh) for OTP delivery and payroll alerts. Email via AWS SES for payslips (PDF attachment), approval notifications, scheduled reports, and HR letters. Both dispatched by BullMQ email/sms queues with retry logic.">
+  <rect x="220" y="576" width="180" height="52" rx="8" stroke-width="0.6"/>
+  <text class="th" x="310" y="596" text-anchor="middle" dominant-baseline="central">SMS + Email</text>
+  <text class="ts" x="310" y="614" text-anchor="middle">SSL Wireless · AWS SES</text>
+</g>
+<g class="node c-coral" data-tip="Biometric devices: Vendor SDK or REST webhook pushes punch records (employee_id, timestamp, direction) to /api/attendance/biometric endpoint. A cron job reconciles device data with hr.attendance_records every 5 minutes in Phase 2.">
+  <rect x="420" y="576" width="180" height="52" rx="8" stroke-width="0.6"/>
+  <text class="th" x="510" y="596" text-anchor="middle" dominant-baseline="central">Biometric devices</text>
+  <text class="ts" x="510" y="614" text-anchor="middle">SDK · Attendance punch sync</text>
+</g>
+<g class="node c-coral" data-tip="DocuSign: REST API with OAuth 2.0. HR module sends signing requests for offer letters, NDAs, policy acknowledgements. Board module sends board minutes and resolutions for Chairman eSign. Webhook confirms signing completion; signed PDF downloaded and stored in S3.">
+  <rect x="620" y="576" width="180" height="52" rx="8" stroke-width="0.6"/>
+  <text class="th" x="710" y="596" text-anchor="middle" dominant-baseline="central">DocuSign</text>
+  <text class="ts" x="710" y="614" text-anchor="middle">HR · Board eSign · Webhook</text>
+</g>
+
+<text font-family="Arial" font-size="9" fill="#bbb" x="410" y="642" text-anchor="middle">Hover over any component for implementation details</text>
+</svg>
+</div>
+
+<div id="tooltip"></div>
+<script>
+const tip = document.getElementById('tooltip');
+document.querySelectorAll('.node[data-tip]').forEach(el => {
+  el.addEventListener('mouseenter', e => {
+    tip.textContent = el.dataset.tip;
+    tip.style.display = 'block';
+  });
+  el.addEventListener('mousemove', e => {
+    tip.style.left = (e.clientX + 14) + 'px';
+    tip.style.top  = (e.clientY - 8)  + 'px';
+  });
+  el.addEventListener('mouseleave', () => {
+    tip.style.display = 'none';
+  });
+});
+</script>
+</body>
+</html>
