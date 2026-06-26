@@ -1,0 +1,46 @@
+# =============================================================================
+# .dockerignore — OK Footwear ERP
+# =============================================================================
+# Excludes development files, secrets, and build artifacts from the Docker
+# build context to speed up builds and prevent secret leakage.
+
+# --- Dependencies (rebuilt in Docker) ---
+node_modules/
+
+# --- Build output (rebuilt in Docker) ---
+dist/
+*.tsbuildinfo
+
+# --- Secrets & environment files (runtime injection only) ---
+.env
+.env.*
+
+# --- Tests ---
+test/
+jest.config.ts
+coverage/
+
+# --- Documentation ---
+docs/
+*.md
+README.md
+
+# --- Git ---
+.git/
+.gitignore
+.gitattributes
+
+# --- IDE & Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
+
+# --- CI/CD ---
+.github/
+docker-compose*.yml

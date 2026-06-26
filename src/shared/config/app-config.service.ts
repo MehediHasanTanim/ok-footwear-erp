@@ -1,134 +1,153 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as Joi from 'joi';
 
-/**
- * Validated, typed application configuration.
- *
- * Design decisions:
- * - Joi validation runs at module init (fail-fast on missing/invalid env vars).
- * - All secrets/URLs read from ConfigService — never hardcoded.
- * - Getters provide defaults for dev-friendliness (e.g., default port 3000).
- *
- * Add new config sections by extending the envSchema and getter methods.
- */
+import type { DatabaseConfig } from './database.config';
+import type { RedisConfig } from './redis.config';
+import type { AuthConfig } from './auth.config';
+import type { AwsConfig } from './aws.config';
+import type { SmsConfig } from './sms.config';
 
-export const appConfigSchema = Joi.object({
-  NODE_ENV: Joi.string()
-    .valid('development', 'test', 'staging', 'production')
-    .default('development'),
-  PORT: Joi.number().port().default(3000),
-
-  // CORS
-  CORS_ORIGINS: Joi.string().default('http://localhost:5173'),
-
-  // Database (Prisma will read DATABASE_URL directly)
-  // DEVIATION: DATABASE_URL is optional in Sprint 1 — Prisma is set up
-  // in a separate Sprint 1 task. Will be made required in Sprint 2.
-  DATABASE_URL: Joi.string().uri().optional().default(''),
-
-  // Redis
-  REDIS_URL: Joi.string().uri().default('redis://localhost:6379'),
-
-  // JWT
-  JWT_SECRET: Joi.string().min(32).required(),
-  JWT_ACCESS_TTL: Joi.string().default('8h'),
-  JWT_REFRESH_TTL: Joi.string().default('30d'),
-
-  // AWS (optional in dev)
-  AWS_REGION: Joi.string().default('ap-southeast-1'),
-  AWS_ACCESS_KEY_ID: Joi.string().allow('').optional().default(''),
-  AWS_SECRET_ACCESS_KEY: Joi.string().allow('').optional().default(''),
-  S3_BUCKET: Joi.string().default('ok-footwear-dev'),
-
-  // SMS (SSL Wireless — Bangladesh provider)
-  SMS_API_URL: Joi.string().uri().default('https://sms.sslwireless.com/api/v3'),
-  SMS_API_TOKEN: Joi.string().allow('').optional().default(''),
-  SMS_SENDER_ID: Joi.string().default('OKFOOTWEAR'),
-});
-
-export type AppConfig = {
-  NODE_ENV: string;
-  PORT: number;
-  CORS_ORIGINS: string;
-  DATABASE_URL: string;
-  REDIS_URL: string;
-  JWT_SECRET: string;
-  JWT_ACCESS_TTL: string;
-  JWT_REFRESH_TTL: string;
-  AWS_REGION: string;
-  AWS_ACCESS_KEY_ID: string;
-  AWS_SECRET_ACCESS_KEY: string;
-  S3_BUCKET: string;
-  SMS_API_URL: string;
-  SMS_API_TOKEN: string;
-  SMS_SENDER_ID: string;
-};
+// =============================================================================
+// AppConfigService — Typed, namespaced configuration facade
+// =============================================================================
+//
+// Wraps @nestjs/config's ConfigService to provide typed, structured access
+// to all 5 configuration namespaces.
+//
+// Design decisions:
+// - Namespace getters return the full typed config object — callers destructure
+//   what they need (e.g., `config.database.url`).
+// - `getOrThrow()` ensures the app can't start with a missing namespace.
+//   If a namespace failed to load, NestJS already aborted during ConfigModule
+//   initialization (fail-fast); this is the second safety net.
+// - App-level settings (nodeEnv, port, allowedOrigins) remain as flat getters
+//   because they don't belong to any business namespace.
+// - All secrets/URLs read from ConfigService — never hardcoded.
 
 @Injectable()
 export class AppConfigService {
-  constructor(private readonly configService: ConfigService<AppConfig>) {}
+  constructor(
+    private readonly configService: ConfigService,
+  ) {}
+
+  // ---------------------------------------------------------------------------
+  // Application-level settings
+  // ---------------------------------------------------------------------------
 
   get nodeEnv(): string {
-    return this.configService.get('NODE_ENV')!;
+    return this.configService.getOrThrow<string>('NODE_ENV');
   }
 
   get port(): number {
-    return this.configService.get('PORT')!;
+    return this.configService.getOrThrow<number>('PORT');
   }
 
-  get corsOrigins(): string[] {
+  get allowedOrigins(): string[] {
     return this.configService
-      .get('CORS_ORIGINS')!
+      .getOrThrow<string>('ALLOWED_ORIGINS')
       .split(',')
-      .map((o: string) => o.trim());
+      .map((o) => o.trim());
   }
 
+  // ---------------------------------------------------------------------------
+  // Namespace accessors — typed, fail-fast
+  // ---------------------------------------------------------------------------
+
+  /** PostgreSQL 16 + PgBouncer configuration. */
+  get database(): DatabaseConfig {
+    return this.configService.getOrThrow<DatabaseConfig>('database');
+  }
+
+  /** Redis 7 configuration (ioredis). */
+  get redis(): RedisConfig {
+    return this.configService.getOrThrow<RedisConfig>('redis');
+  }
+
+  /** JWT, RBAC, MFA configuration. */
+  get auth(): AuthConfig {
+    return this.configService.getOrThrow<AuthConfig>('auth');
+  }
+
+  /** AWS S3 + SES configuration (MinIO fallback in dev). */
+  get aws(): AwsConfig {
+    return this.configService.getOrThrow<AwsConfig>('aws');
+  }
+
+  /** SSL Wireless SMS gateway configuration. */
+  get sms(): SmsConfig {
+    return this.configService.getOrThrow<SmsConfig>('sms');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Convenience getters — commonly used flat values from namespaces
+  // ---------------------------------------------------------------------------
+  // Kept for backward compatibility with existing code (QueueModule, RedisModule,
+  // LoggerModule). These delegate to the namespaced accessors.
+  // Once all consumers migrate to config.database.url pattern, these can be
+  // removed (Sprint 2 cleanup).
+
+  /** Direct alias for config.database.url. */
   get databaseUrl(): string {
-    return this.configService.get('DATABASE_URL')!;
+    return this.database.url;
   }
 
+  /** Direct alias for config.database.directUrl. */
+  get directDatabaseUrl(): string {
+    return this.database.directUrl;
+  }
+
+  /** Direct alias for config.redis.url. */
   get redisUrl(): string {
-    return this.configService.get('REDIS_URL')!;
+    return this.redis.url;
   }
 
+  /** Direct alias for config.auth.jwtSecret. */
   get jwtSecret(): string {
-    return this.configService.get('JWT_SECRET')!;
+    return this.auth.jwtSecret;
   }
 
+  /** Direct alias for config.auth.jwtAccessTtl. */
   get jwtAccessTtl(): string {
-    return this.configService.get('JWT_ACCESS_TTL')!;
+    return this.auth.jwtAccessTtl;
   }
 
+  /** Direct alias for config.auth.jwtRefreshTtl. */
   get jwtRefreshTtl(): string {
-    return this.configService.get('JWT_REFRESH_TTL')!;
+    return this.auth.jwtRefreshTtl;
   }
 
+  /** Direct alias for config.aws.region. */
   get awsRegion(): string {
-    return this.configService.get('AWS_REGION')!;
+    return this.aws.region;
   }
 
+  /** Direct alias for config.aws.accessKeyId. */
   get awsAccessKeyId(): string {
-    return this.configService.get('AWS_ACCESS_KEY_ID')!;
+    return this.aws.accessKeyId;
   }
 
+  /** Direct alias for config.aws.secretAccessKey. */
   get awsSecretAccessKey(): string {
-    return this.configService.get('AWS_SECRET_ACCESS_KEY')!;
+    return this.aws.secretAccessKey;
   }
 
+  /** Direct alias for config.aws.s3Bucket. */
   get s3Bucket(): string {
-    return this.configService.get('S3_BUCKET')!;
+    return this.aws.s3Bucket;
   }
 
+  /** Direct alias for config.sms.apiUrl. */
   get smsApiUrl(): string {
-    return this.configService.get('SMS_API_URL')!;
+    return this.sms.apiUrl;
   }
 
+  /** Direct alias for config.sms.apiToken. */
   get smsApiToken(): string {
-    return this.configService.get('SMS_API_TOKEN')!;
+    return this.sms.apiToken;
   }
 
+  /** Direct alias for config.sms.senderId. */
   get smsSenderId(): string {
-    return this.configService.get('SMS_SENDER_ID')!;
+    return this.sms.senderId;
   }
 }

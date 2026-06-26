@@ -1377,14 +1377,14 @@ export const databaseConfigSchema = {
 NODE_ENV=development
 PORT=3000
 LOG_LEVEL=debug
-ALLOWED_ORIGINS=http://localhost:5173
+ALLOWED_ORIGINS=http://localhost:7173
 
 # Database
 DATABASE_URL=postgresql://erp:password@localhost:5432/erp_dev
 
 # Redis
 REDIS_HOST=localhost
-REDIS_PORT=6379
+REDIS_PORT=7379
 
 # JWT
 JWT_SECRET=change-me-in-production-min-32-chars

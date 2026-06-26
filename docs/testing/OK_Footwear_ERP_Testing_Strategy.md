@@ -739,7 +739,7 @@ jobs:
       - run: npm run test:integration
         env:
           DATABASE_URL: postgresql://erp:test@localhost:5432/erp_test
-          REDIS_URL: redis://localhost:6379
+          REDIS_URL: redis://localhost:7379
 
   frontend-tests:
     runs-on: ubuntu-latest

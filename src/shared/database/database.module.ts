@@ -1,12 +1,25 @@
+import { Module, Global } from '@nestjs/common';
+
+import { PrismaService } from './prisma.service';
+
 /**
- * Database module stub.
+ * Database module — provides PrismaService globally.
  *
- * Full implementation will wrap PrismaService as a NestJS provider with
- * onModuleInit/onModuleDestroy lifecycle hooks for connection management.
+ * @Global decorator: PrismaService is available in every feature module
+ * without requiring explicit imports of DatabaseModule.
  *
- * Prisma setup (post Sprint 1 tasks):
- * - Multi-schema preview feature for 8 schemas (sys, ord, prc, etc.)
- * - PgBouncer transaction mode with connection limit 20
- * - Extensions: uuid-ossp, pg_trgm, pgcrypto, btree_gin
+ * Lifecycle:
+ * - onModuleInit: PrismaService.$connect() — opens connections to PgBouncer.
+ * - onModuleDestroy: PrismaService.$disconnect() — graceful shutdown.
+ *
+ * PgBouncer transaction mode:
+ * - DATABASE_URL includes ?pgbouncer=true → Prisma disables prepared statements.
+ * - connection_limit=20 in schema.prisma datasource → max 20 conns to PgBouncer.
+ * - PgBouncer multiplexes these onto its own pool of PostgreSQL connections.
  */
+@Global()
+@Module({
+  providers: [PrismaService],
+  exports: [PrismaService],
+})
 export class DatabaseModule {}

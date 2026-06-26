@@ -1,0 +1,848 @@
+// =============================================================================
+// OK Footwear ERP — Prisma v5 Schema
+// =============================================================================
+// Multi-schema architecture: 9 PostgreSQL schemas mapped to business domains.
+//
+// Schemas:
+//   sys  — System (users, roles, permissions, audit, document sequences)
+//   auth — Authentication (refresh tokens, MFA, login audit)
+//   ord  — Orders (buyers, orders, articles, quotations)
+//   prc  — Procurement (vendors, purchase orders, GRN)
+//   mfg  — Manufacturing (BOM, production orders, QC)
+//   inv  — Inventory (warehouses, stock items, transactions)
+//   fin  — Finance (chart of accounts, GL entries, bank accounts)
+//   hr   — Human Resources (employees, payroll, leave, attendance)
+//   brd  — Board Governance (directors, shareholders, meetings, resolutions, AGMs, dividends)
+//
+// PgBouncer: transaction mode enabled via pgbouncer=true in DATABASE_URL.
+//   Connection limit: 20 — matches PgBouncer pool size.
+//   Prisma's connection_limit controls the number of connections the query
+//   engine opens to PgBouncer (not to PostgreSQL directly).
+//
+// Key design decisions:
+//   - UUID v4 for all primary keys (gen_random_uuid() via pgcrypto extension).
+//   - TIMESTAMPTZ for all timestamps (UTC-normalised).
+//   - Soft-delete pattern: deleted_at column on mutable master-data tables.
+//   - Append-only ledger tables never updated/deleted (enforced at app layer).
+//   - snake_case column names (@map) to match PostgreSQL convention.
+// =============================================================================
+
+// ---------------------------------------------------------------------------
+// Datasource
+// ---------------------------------------------------------------------------
+// DATABASE_URL must include:
+//   ?pgbouncer=true       — disables prepared statements (required for
+//                           PgBouncer transaction mode).
+//   &connection_limit=20  — Prisma query engine pool size. Must match
+//                           PgBouncer's max_client_conn (20).
+//
+// DIRECT_DATABASE_URL: direct PostgreSQL connection (bypasses PgBouncer).
+//   Required for prisma migrate (DDL) — PgBouncer transaction mode does
+//   not support CREATE/ALTER/DROP statements.
+//
+// Example DATABASE_URL:
+//   postgresql://user:pass@pgbouncer:6432/db?pgbouncer=true&connection_limit=20
+// Example DIRECT_DATABASE_URL:
+//   postgresql://user:pass@postgres:5432/db
+// ---------------------------------------------------------------------------
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
+  schemas   = ["sys", "auth", "ord", "prc", "mfg", "inv", "fin", "hr", "brd"]
+}
+
+// ---------------------------------------------------------------------------
+// Generator
+// ---------------------------------------------------------------------------
+// previewFeatures=["multiSchema"] enables @@schema() per model.
+// multiSchema was promoted from preview to GA in Prisma ORM v5.18+,
+// but we keep it in previewFeatures for compatibility with v5.0–v5.17.
+// ---------------------------------------------------------------------------
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+// =============================================================================
+// SCHEMA: sys — System (Core)
+// =============================================================================
+// Users, roles, permissions, document sequences, audit log.
+// This schema is the foundation — all other schemas reference sys.users.
+
+model DocumentSequence {
+  prefix      String  @id @db.VarChar(10)
+  lastNumber  Int     @default(0) @map("last_number")
+  padLength   Int     @default(6) @map("pad_length")
+  separator   String  @default("-") @db.Char(1)
+
+  @@schema("sys")
+  @@map("document_sequences")
+}
+
+model Role {
+  id          String    @id @default(uuid()) @db.Uuid
+  name        String    @unique @db.VarChar(100)
+  description String?   @db.Text
+  isSystem    Boolean   @default(false) @map("is_system")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  rolePermissions RolePermission[]
+  userRoles       UserRole[]
+
+  @@schema("sys")
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(uuid()) @db.Uuid
+  module      String   @db.VarChar(50)
+  action      String   @db.VarChar(50) // read, create, update, delete, approve, export
+  description String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  rolePermissions RolePermission[]
+
+  @@unique([module, action])
+  @@schema("sys")
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String @map("role_id") @db.Uuid
+  permissionId String @map("permission_id") @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@schema("sys")
+  @@map("role_permissions")
+}
+
+model User {
+  id            String    @id @default(uuid()) @db.Uuid
+  email         String    @unique @db.VarChar(255)
+  passwordHash  String    @map("password_hash") @db.VarChar(255)
+  firstName     String    @map("first_name") @db.VarChar(100)
+  middleName    String?   @map("middle_name") @db.VarChar(100)
+  lastName      String    @map("last_name") @db.VarChar(100)
+  isActive      Boolean   @default(true) @map("is_active")
+  lastLoginAt   DateTime? @map("last_login_at") @db.Timestamptz()
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt     DateTime? @map("deleted_at") @db.Timestamptz()
+
+  userRoles      UserRole[]
+  refreshTokens  RefreshToken[]
+
+  @@schema("sys")
+  @@map("users")
+}
+
+model UserRole {
+  userId String @map("user_id") @db.Uuid
+  roleId String @map("role_id") @db.Uuid
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@schema("sys")
+  @@map("user_roles")
+}
+
+// =============================================================================
+// SCHEMA: auth — Authentication
+// =============================================================================
+// Refresh tokens, MFA settings, login attempt audit.
+// Separated from sys to isolate auth concerns and reduce blast radius.
+
+model RefreshToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  tokenHash String   @unique @map("token_hash") @db.VarChar(255)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz()
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz()
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  // Cross-schema relation: auth.refresh_tokens.user_id → sys.users.id
+  // Prisma allows cross-schema relations when multiSchema is enabled.
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@schema("auth")
+  @@map("refresh_tokens")
+}
+
+model LoginAttempt {
+  id         String   @id @default(uuid()) @db.Uuid
+  email      String   @db.VarChar(255)
+  ipAddress  String?  @map("ip_address") @db.Inet
+  userAgent  String?  @map("user_agent") @db.Text
+  success    Boolean
+  failureReason String? @map("failure_reason") @db.VarChar(255)
+  attemptedAt DateTime @default(now()) @map("attempted_at") @db.Timestamptz()
+
+  @@index([email, attemptedAt])
+  @@schema("auth")
+  @@map("login_attempts")
+}
+
+// =============================================================================
+// SCHEMA: ord — Orders
+// =============================================================================
+// Buyers, orders, articles, quotations, samples, complaints.
+
+model Buyer {
+  id               String    @id @default(uuid()) @db.Uuid
+  name             String    @db.VarChar(200)
+  shortName        String?   @map("short_name") @db.VarChar(50)
+  contactPerson    String?   @map("contact_person") @db.VarChar(100)
+  email            String?   @db.VarChar(255)
+  phone            String?   @db.VarChar(30)
+  address          String?   @db.Text
+  country          String?   @db.VarChar(100)
+  paymentTerms     String?   @map("payment_terms") @db.VarChar(100)
+  isActive         Boolean   @default(true) @map("is_active")
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt        DateTime? @map("deleted_at") @db.Timestamptz()
+
+  orders Order[]
+
+  @@schema("ord")
+  @@map("buyers")
+}
+
+model Order {
+  id              String    @id @default(uuid()) @db.Uuid
+  orderNumber     String    @unique @map("order_number") @db.VarChar(20)
+  buyerId         String    @map("buyer_id") @db.Uuid
+  orderDate       DateTime  @map("order_date") @db.Date
+  deliveryDate    DateTime? @map("delivery_date") @db.Date
+  status          OrderStatus @default(PENDING)
+  totalValue      Decimal?  @map("total_value") @db.Decimal(15, 2)
+  currency        String    @default("USD") @db.VarChar(3)
+  remarks         String?   @db.Text
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  buyer Buyer @relation(fields: [buyerId], references: [id])
+
+  @@index([buyerId])
+  @@index([status])
+  @@schema("ord")
+  @@map("orders")
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  IN_PRODUCTION
+  PARTIALLY_SHIPPED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+
+  @@schema("ord")
+}
+
+// =============================================================================
+// SCHEMA: prc — Procurement
+// =============================================================================
+// Vendors, purchase orders, GRN, vendor invoices.
+
+model Vendor {
+  id            String    @id @default(uuid()) @db.Uuid
+  name          String    @db.VarChar(200)
+  shortName     String?   @map("short_name") @db.VarChar(50)
+  contactPerson String?   @map("contact_person") @db.VarChar(100)
+  email         String?   @db.VarChar(255)
+  phone         String?   @db.VarChar(30)
+  address       String?   @db.Text
+  category      String?   @db.VarChar(50) // raw_material, packaging, machinery, service
+  paymentTerms  String?   @map("payment_terms") @db.VarChar(100)
+  isActive      Boolean   @default(true) @map("is_active")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt     DateTime? @map("deleted_at") @db.Timestamptz()
+
+  purchaseOrders PurchaseOrder[]
+
+  @@schema("prc")
+  @@map("vendors")
+}
+
+model PurchaseOrder {
+  id            String   @id @default(uuid()) @db.Uuid
+  poNumber      String   @unique @map("po_number") @db.VarChar(20)
+  vendorId      String   @map("vendor_id") @db.Uuid
+  orderDate     DateTime @map("order_date") @db.Date
+  expectedDate  DateTime? @map("expected_date") @db.Date
+  status        POStatus @default(DRAFT)
+  totalValue    Decimal? @map("total_value") @db.Decimal(15, 2)
+  currency      String   @default("BDT") @db.VarChar(3)
+  remarks       String?  @db.Text
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@index([vendorId])
+  @@index([status])
+  @@schema("prc")
+  @@map("purchase_orders")
+}
+
+enum POStatus {
+  DRAFT
+  ISSUED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+
+  @@schema("prc")
+}
+
+// =============================================================================
+// SCHEMA: mfg — Manufacturing
+// =============================================================================
+// BOM, production orders, QC inspections, machines, lasts & moulds.
+
+model BomHeader {
+  id            String    @id @default(uuid()) @db.Uuid
+  bomCode       String    @unique @map("bom_code") @db.VarChar(50)
+  articleCode   String    @map("article_code") @db.VarChar(50)
+  description   String?   @db.Text
+  version       Int       @default(1)
+  isActive      Boolean   @default(true) @map("is_active")
+  effectiveDate DateTime? @map("effective_date") @db.Date
+  expiryDate    DateTime? @map("expiry_date") @db.Date
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@schema("mfg")
+  @@map("bom_headers")
+}
+
+// =============================================================================
+// SCHEMA: inv — Inventory
+// =============================================================================
+// Warehouses, stock items, stock transactions, stock counts.
+
+model Warehouse {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String    @db.VarChar(100)
+  code      String    @unique @db.VarChar(20)
+  location  String?   @db.VarChar(200)
+  isActive  Boolean   @default(true) @map("is_active")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@schema("inv")
+  @@map("warehouses")
+}
+
+model StockItem {
+  id            String    @id @default(uuid()) @db.Uuid
+  itemCode      String    @unique @map("item_code") @db.VarChar(50)
+  name          String    @db.VarChar(200)
+  category      String?   @db.VarChar(50) // raw_material, finished_goods, packaging, consumable
+  unitOfMeasure String    @default("PCS") @map("unit_of_measure") @db.VarChar(20)
+  reorderLevel  Decimal?  @map("reorder_level") @db.Decimal(12, 2)
+  isActive      Boolean   @default(true) @map("is_active")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@schema("inv")
+  @@map("stock_items")
+}
+
+// =============================================================================
+// SCHEMA: fin — Finance
+// =============================================================================
+// Chart of accounts, GL entries, bank accounts, fixed assets.
+
+model ChartOfAccount {
+  id              String    @id @default(uuid()) @db.Uuid
+  accountCode     String    @unique @map("account_code") @db.VarChar(20)
+  accountName     String    @map("account_name") @db.VarChar(200)
+  accountType     AccountType @map("account_type")
+  parentId        String?   @map("parent_id") @db.Uuid
+  isActive        Boolean   @default(true) @map("is_active")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  parent    ChartOfAccount?  @relation("CoAHierarchy", fields: [parentId], references: [id])
+  children  ChartOfAccount[] @relation("CoAHierarchy")
+
+  @@index([parentId])
+  @@schema("fin")
+  @@map("chart_of_accounts")
+}
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+
+  @@schema("fin")
+  REVENUE
+  EXPENSE
+}
+
+// =============================================================================
+// SCHEMA: hr — Human Resources
+// =============================================================================
+// Employees, payroll, leave, attendance, PF, gratuity.
+
+model Employee {
+  id             String    @id @default(uuid()) @db.Uuid
+  employeeCode   String    @unique @map("employee_code") @db.VarChar(20)
+  firstName      String    @map("first_name") @db.VarChar(100)
+  middleName     String?   @map("middle_name") @db.VarChar(100)
+  lastName       String    @map("last_name") @db.VarChar(100)
+  email          String?   @db.VarChar(255)
+  phone          String?   @db.VarChar(30)
+  department     String?   @db.VarChar(100)
+  designation    String?   @db.VarChar(100)
+  joiningDate    DateTime? @map("joining_date") @db.Date
+  employmentType String?   @map("employment_type") @db.VarChar(20) // permanent, contract, daily
+  isActive       Boolean   @default(true) @map("is_active")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt      DateTime? @map("deleted_at") @db.Timestamptz()
+
+  @@schema("hr")
+  @@map("employees")
+}
+
+// =============================================================================
+// SCHEMA: brd — Board Governance
+// =============================================================================
+// Directors, shareholders, share transactions, board meetings, resolutions,
+// AGMs/EGMs, dividends, related-party register.
+// 13 tables total — corporate governance domain.
+// Reference: Companies Act 1994 (Bangladesh), RJSC compliance.
+
+model Director {
+  id                 String             @id @default(uuid()) @db.Uuid
+  firstName          String             @map("first_name") @db.VarChar(100)
+  middleName         String?            @map("middle_name") @db.VarChar(100)
+  lastName           String             @map("last_name") @db.VarChar(100)
+  fatherName         String?            @map("father_name") @db.VarChar(200)
+  din                String?            @unique @db.VarChar(50)
+  nidEncrypted       Bytes?             @map("nid_encrypted")
+  passportEncrypted  Bytes?             @map("passport_encrypted")
+  dateOfBirth        DateTime?          @map("date_of_birth") @db.Date
+  nationality        String             @default("Bangladeshi") @db.VarChar(100)
+  address            String?            @db.Text
+  email              String?            @db.VarChar(255)
+  phone              String?            @db.VarChar(30)
+  designation        DirectorDesignation
+  appointmentDate    DateTime           @map("appointment_date") @db.Date
+  tenureYears        Int?               @map("tenure_years")
+  resignationDate    DateTime?          @map("resignation_date") @db.Date
+  status             DirectorStatus     @default(ACTIVE)
+  qualificationShares Int              @default(0) @map("qualification_shares")
+  employeeId         String?            @map("employee_id") @db.Uuid
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz()
+  createdBy          String             @map("created_by") @db.Uuid
+
+  shareholders      Shareholder[]
+  meetingAttendees  MeetingAttendee[]
+  relatedParties    RelatedParty[]
+
+  @@schema("brd")
+  @@map("directors")
+}
+
+enum DirectorDesignation {
+  CHAIRMAN
+  MANAGING_DIRECTOR
+  EXECUTIVE_DIRECTOR
+  INDEPENDENT_DIRECTOR
+  NOMINEE_DIRECTOR
+  NON_EXECUTIVE_DIRECTOR
+
+  @@schema("brd")
+}
+
+enum DirectorStatus {
+  ACTIVE
+  RESIGNED
+  REMOVED
+  DECEASED
+
+  @@schema("brd")
+}
+
+model Shareholder {
+  id              String          @id @default(uuid()) @db.Uuid
+  shareholderType ShareholderType @map("shareholder_type")
+  name            String          @db.VarChar(200)
+  nidOrReg        String?         @map("nid_or_reg") @db.VarChar(50)
+  address         String?         @db.Text
+  email           String?         @db.VarChar(255)
+  phone           String?         @db.VarChar(30)
+  directorId      String?         @map("director_id") @db.Uuid
+  isNominee       Boolean         @default(false) @map("is_nominee")
+  beneficialOwner String?         @map("beneficial_owner") @db.VarChar(200)
+  isActive        Boolean         @default(true) @map("is_active")
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz()
+
+  director              Director?           @relation(fields: [directorId], references: [id])
+  shareTransactionsFrom ShareTransaction[]  @relation("FromShareholder")
+  shareTransactionsTo   ShareTransaction[]  @relation("ToShareholder")
+  shareCertificates     ShareCertificate[]
+  agmProxies            AgmProxy[]
+  dividendPayments      DividendPayment[]
+
+  @@schema("brd")
+  @@map("shareholders")
+}
+
+enum ShareholderType {
+  INDIVIDUAL
+  CORPORATE
+
+  @@schema("brd")
+}
+
+// Append-only ledger — never updated or deleted
+model ShareTransaction {
+  id              String        @id @default(uuid()) @db.Uuid
+  txnType         ShareTxnType  @map("txn_type")
+  txnDate         DateTime      @map("txn_date") @db.Date
+  fromShareholder String?       @map("from_shareholder") @db.Uuid
+  toShareholder   String        @map("to_shareholder") @db.Uuid
+  shares          Int
+  pricePerShare   Decimal?      @map("price_per_share") @db.Decimal(12, 4)
+  resolutionId    String?       @map("resolution_id") @db.Uuid
+  approvedBy      String        @map("approved_by") @db.Uuid
+  notes           String?       @db.Text
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz()
+
+  fromShareholderRel Shareholder? @relation("FromShareholder", fields: [fromShareholder], references: [id])
+  toShareholderRel   Shareholder  @relation("ToShareholder", fields: [toShareholder], references: [id])
+
+  @@index([toShareholder, txnDate(sort: Desc)])
+  @@schema("brd")
+  @@map("share_transactions")
+}
+
+enum ShareTxnType {
+  ALLOTMENT
+  TRANSFER
+  BUYBACK
+  BONUS
+
+  @@schema("brd")
+}
+
+model ShareCertificate {
+  id             String             @id @default(uuid()) @db.Uuid
+  certNumber     String             @unique @map("cert_number") @db.VarChar(50)
+  shareholderId  String             @map("shareholder_id") @db.Uuid
+  shares         Int
+  issueDate      DateTime           @map("issue_date") @db.Date
+  cancelledDate  DateTime?          @map("cancelled_date") @db.Date
+  status         CertificateStatus  @default(ACTIVE)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz()
+
+  shareholder Shareholder @relation(fields: [shareholderId], references: [id])
+
+  @@schema("brd")
+  @@map("share_certificates")
+}
+
+enum CertificateStatus {
+  ACTIVE
+  CANCELLED
+
+  @@schema("brd")
+}
+
+model BoardMeeting {
+  id             String         @id @default(uuid()) @db.Uuid
+  meetingType    MeetingType    @map("meeting_type")
+  scheduledAt    DateTime       @map("scheduled_at") @db.Timestamptz()
+  venue          String?        @db.VarChar(300)
+  videoLink      String?        @map("video_link") @db.VarChar(500)
+  quorumRequired Int            @default(2) @map("quorum_required")
+  status         MeetingStatus  @default(SCHEDULED)
+  minutesSigned  Boolean        @default(false) @map("minutes_signed")
+  signedAt       DateTime?      @map("signed_at") @db.Timestamptz()
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime       @updatedAt @map("updated_at") @db.Timestamptz()
+  createdBy      String         @map("created_by") @db.Uuid
+
+  agenda      MeetingAgenda[]
+  attendees   MeetingAttendee[]
+  resolutions Resolution[]
+
+  @@schema("brd")
+  @@map("board_meetings")
+}
+
+enum MeetingType {
+  REGULAR
+  SPECIAL
+  CIRCULAR
+
+  @@schema("brd")
+}
+
+enum MeetingStatus {
+  SCHEDULED
+  HELD
+  ADJOURNED
+  CANCELLED
+  INQUORATE
+
+  @@schema("brd")
+}
+
+model MeetingAgenda {
+  id          String   @id @default(uuid()) @db.Uuid
+  meetingId   String   @map("meeting_id") @db.Uuid
+  sequence    Int
+  title       String   @db.VarChar(300)
+  description String?  @db.Text
+  presenter   String?  @db.VarChar(100)
+  timeMinutes Int?     @map("time_minutes")
+
+  resolutions Resolution[]
+
+  meeting BoardMeeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@unique([meetingId, sequence])
+  @@schema("brd")
+  @@map("meeting_agenda")
+}
+
+model MeetingAttendee {
+  id          String     @id @default(uuid()) @db.Uuid
+  meetingId   String     @map("meeting_id") @db.Uuid
+  directorId  String     @map("director_id") @db.Uuid
+  attendance  Attendance @default(PRESENT)
+
+  meeting  BoardMeeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  director Director     @relation(fields: [directorId], references: [id])
+
+  @@unique([meetingId, directorId])
+  @@schema("brd")
+  @@map("meeting_attendees")
+}
+
+enum Attendance {
+  PRESENT
+  VIDEO
+  ABSENT
+  LEAVE_OF_ABSENCE
+
+  @@schema("brd")
+}
+
+// Append-only after approval
+model Resolution {
+  id               String             @id @default(uuid()) @db.Uuid
+  resolutionNumber String             @unique @map("resolution_number") @db.VarChar(20)
+  meetingId        String?            @map("meeting_id") @db.Uuid
+  agendaId         String?            @map("agenda_id") @db.Uuid
+  resolutionDate   DateTime           @map("resolution_date") @db.Date
+  resolutionType   ResolutionType     @map("resolution_type")
+  category         ResolutionCategory
+  title            String             @db.VarChar(300)
+  resolutionText   String             @map("resolution_text") @db.Text
+  votesFor         Int                @default(0) @map("votes_for")
+  votesAgainst     Int                @default(0) @map("votes_against")
+  votesAbstained   Int                @default(0) @map("votes_abstained")
+  outcome          ResolutionOutcome  @default(PASSED)
+  signedAt         DateTime?          @map("signed_at") @db.Timestamptz()
+  sha256Hash       String?            @map("sha256_hash") @db.VarChar(64)
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz()
+  createdBy        String             @map("created_by") @db.Uuid
+
+  meeting   BoardMeeting?  @relation(fields: [meetingId], references: [id])
+  agenda    MeetingAgenda? @relation(fields: [agendaId], references: [id])
+  dividends Dividend[]
+
+  @@schema("brd")
+  @@map("resolutions")
+}
+
+enum ResolutionType {
+  ORDINARY
+  SPECIAL
+  CIRCULAR
+
+  @@schema("brd")
+}
+
+enum ResolutionCategory {
+  FINANCIAL
+  APPOINTMENT
+  POLICY
+  CONTRACT
+  REGULATORY
+  DIVIDEND
+  SHARE
+  OTHER
+
+  @@schema("brd")
+}
+
+enum ResolutionOutcome {
+  PASSED
+  FAILED
+  DEFERRED
+  WITHDRAWN
+
+  @@schema("brd")
+}
+
+model Agm {
+  id             String      @id @default(uuid()) @db.Uuid
+  meetingType    AgmType     @map("meeting_type")
+  financialYear  Int         @map("financial_year")
+  meetingDate    DateTime    @map("meeting_date") @db.Timestamptz()
+  venue          String?     @db.VarChar(300)
+  noticeSentAt   DateTime?   @map("notice_sent_at") @db.Timestamptz()
+  status         AgmStatus   @default(SCHEDULED)
+  minutesUrl     String?     @map("minutes_url") @db.VarChar(500)
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime    @updatedAt @map("updated_at") @db.Timestamptz()
+  createdBy      String      @map("created_by") @db.Uuid
+
+  proxies AgmProxy[]
+
+  @@schema("brd")
+  @@map("agms")
+}
+
+enum AgmType {
+  AGM
+  EGM
+
+  @@schema("brd")
+}
+
+enum AgmStatus {
+  SCHEDULED
+  HELD
+  ADJOURNED
+  CANCELLED
+
+  @@schema("brd")
+}
+
+model AgmProxy {
+  id                String   @id @default(uuid()) @db.Uuid
+  agmId             String   @map("agm_id") @db.Uuid
+  shareholderId     String   @map("shareholder_id") @db.Uuid
+  proxyHolder       String   @map("proxy_holder") @db.VarChar(200)
+  sharesRepresented Int      @map("shares_represented")
+  proxyDate         DateTime @map("proxy_date") @db.Date
+
+  agm         Agm         @relation(fields: [agmId], references: [id])
+  shareholder Shareholder @relation(fields: [shareholderId], references: [id])
+
+  @@unique([agmId, shareholderId])
+  @@schema("brd")
+  @@map("agm_proxies")
+}
+
+model Dividend {
+  id                 String          @id @default(uuid()) @db.Uuid
+  financialYear      Int             @map("financial_year")
+  dividendType       DividendType    @map("dividend_type")
+  declarationDate    DateTime        @map("declaration_date") @db.Date
+  recordDate         DateTime        @map("record_date") @db.Date
+  paymentDate        DateTime        @map("payment_date") @db.Date
+  ratePerShare       Decimal         @map("rate_per_share") @db.Decimal(10, 4)
+  totalDividend      Decimal         @map("total_dividend") @db.Decimal(16, 2)
+  withholdingTaxPct  Decimal         @default(10) @map("withholding_tax_pct") @db.Decimal(5, 2)
+  status             DividendStatus  @default(DECLARED)
+  resolutionId       String?         @map("resolution_id") @db.Uuid
+  glEntryId          String?         @map("gl_entry_id") @db.Uuid
+  createdAt          DateTime        @default(now()) @map("created_at") @db.Timestamptz()
+  createdBy          String          @map("created_by") @db.Uuid
+
+  resolution Resolution?         @relation(fields: [resolutionId], references: [id])
+  payments   DividendPayment[]
+
+  @@schema("brd")
+  @@map("dividends")
+}
+
+enum DividendType {
+  INTERIM
+  FINAL
+
+  @@schema("brd")
+}
+
+enum DividendStatus {
+  DECLARED
+  APPROVED
+  PAID
+
+  @@schema("brd")
+}
+
+model DividendPayment {
+  id             String                 @id @default(uuid()) @db.Uuid
+  dividendId     String                 @map("dividend_id") @db.Uuid
+  shareholderId  String                 @map("shareholder_id") @db.Uuid
+  sharesHeld     Int                    @map("shares_held")
+  grossAmount    Decimal                @map("gross_amount") @db.Decimal(12, 2)
+  taxDeducted    Decimal                @default(0) @map("tax_deducted") @db.Decimal(10, 2)
+  netAmount      Decimal                @map("net_amount") @db.Decimal(12, 2)
+  paymentStatus  DividendPaymentStatus  @default(PENDING) @map("payment_status")
+  paidAt         DateTime?              @map("paid_at") @db.Timestamptz()
+
+  dividend    Dividend    @relation(fields: [dividendId], references: [id])
+  shareholder Shareholder @relation(fields: [shareholderId], references: [id])
+
+  @@unique([dividendId, shareholderId])
+  @@schema("brd")
+  @@map("dividend_payments")
+}
+
+enum DividendPaymentStatus {
+  PENDING
+  PAID
+  UNCLAIMED
+
+  @@schema("brd")
+}
+
+model RelatedParty {
+  id           String                  @id @default(uuid()) @db.Uuid
+  name         String                  @db.VarChar(200)
+  relationship String                  @db.VarChar(100)
+  directorId   String?                 @map("director_id") @db.Uuid
+  entityType   RelatedPartyEntityType  @map("entity_type")
+  notes        String?                 @db.Text
+  isActive     Boolean                 @default(true) @map("is_active")
+  createdAt    DateTime                @default(now()) @map("created_at") @db.Timestamptz()
+
+  director Director? @relation(fields: [directorId], references: [id])
+
+  @@schema("brd")
+  @@map("related_parties")
+}
+
+enum RelatedPartyEntityType {
+  INDIVIDUAL
+  COMPANY
+
+  @@schema("brd")
+}

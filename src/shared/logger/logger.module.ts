@@ -1,49 +1,157 @@
 import { Module, Global } from '@nestjs/common';
 import { LoggerModule as PinoLoggerModule } from 'nestjs-pino';
+import { v7 as uuidv7 } from 'uuid';
 
-/**
- * Structured JSON logger module.
- *
- * Uses nestjs-pino which wraps pino-http for HTTP request logging.
- * Correlation IDs (X-Correlation-ID header) are handled by pino-http's
- * genReqId option, generating UUID v7 on demand.
- *
- * Design decisions:
- * - @Global: logger is used in exceptions filters, interceptors, and guards
- *   that may be instantiated outside the module tree.
- * - Pretty-print in development; JSON in production for log aggregation.
- * - Redact Authorization header to prevent token leakage in logs.
- */
+import { AppConfigService } from '@shared/config/app-config.service';
+import { CorrelationStore } from './correlation-store';
+import { AppLogger } from './app-logger.service';
+
+// =============================================================================
+// LoggerModule — Structured JSON logging with correlation ID propagation
+// =============================================================================
+//
+// Wraps nestjs-pino (which wraps pino-http) to provide:
+//   - UUID v7 correlation_id in every log line (time-ordered, sortable)
+//   - AsyncLocalStorage-based propagation (no req-scoped injection)
+//   - X-Correlation-ID response header (always present)
+//   - Required log fields: correlation_id, user_id, method, path,
+//     status_code, duration_ms, module
+//   - JSON structured format in production; pino-pretty in development
+//   - Sensitive header redaction (Authorization, Cookie)
+//
+// @Global: logger is used in guards, filters, interceptors, and pipes
+// that may be instantiated outside the normal module tree.
+
 @Global()
 @Module({
   imports: [
-    PinoLoggerModule.forRoot({
-      pinoHttp: {
-        // Use X-Correlation-ID if present, otherwise generate UUID v7
-        genReqId: (req) =>
-          req.headers['x-correlation-id'] ?? crypto.randomUUID(),
-        // Redact sensitive headers from logs
-        redact: {
-          paths: ['req.headers.authorization', 'req.headers.cookie'],
-          censor: '[REDACTED]',
+    PinoLoggerModule.forRootAsync({
+      // DEVIATION: We import AppConfigModule in the AppModule, but since
+      // LoggerModule needs ConfigService for NODE_ENV, we use forRootAsync.
+      // AppConfigModule is already @Global() so importing here is redundant
+      // but harmless — NestJS deduplicates.
+      inject: [AppConfigService],
+      useFactory: (configService: AppConfigService) => ({
+        pinoHttp: {
+          // -------------------------------------------------------------
+          // Log level — from env or default to 'info'
+          // -------------------------------------------------------------
+          level: configService.nodeEnv === 'production' ? 'info' : 'debug',
+
+          // -------------------------------------------------------------
+          // Correlation ID — read from req.id set by CorrelationMiddleware
+          // -------------------------------------------------------------
+          // req.id is set as UUID v7 in correlation.middleware.ts.
+          // If somehow the middleware didn't run (shouldn't happen), fall
+          // back to generating a v7 on the spot.
+          genReqId: (req) => {
+            const existing = (req as unknown as Record<string, unknown>).id;
+            if (typeof existing === 'string' && existing.length > 0) {
+              return existing;
+            }
+            return uuidv7();
+          },
+
+          // -------------------------------------------------------------
+          // Mixin — inject correlation_id, user_id, and module into
+          //        every HTTP auto-log line
+          // -------------------------------------------------------------
+          mixin() {
+            const ctx = CorrelationStore.getStore();
+            return {
+              correlation_id: ctx?.correlationId,
+              user_id: ctx?.userId,
+              // module for HTTP-level logs defaults to 'http'; individual
+              // services use AppLogger which sets their own module name
+              module: 'http',
+            };
+          },
+
+          // -------------------------------------------------------------
+          // Custom serializers — log only the fields we need
+          // -------------------------------------------------------------
+          serializers: {
+            req: (req) => ({
+              method: req.method,
+              path: req.url,
+              // Do NOT include headers — they contain sensitive data
+              // and the redact paths below handle header-level redaction
+              // but we don't want full headers in logs anyway.
+            }),
+            res: (res) => ({
+              status_code: res.statusCode,
+            }),
+          },
+
+          // -------------------------------------------------------------
+          // Custom log level for specific paths (health, metrics = trace)
+          // -------------------------------------------------------------
+          customLogLevel(_req, res, err) {
+            if (err) return 'error'; // Always log errors
+            if (res.statusCode >= 500) return 'error';
+            if (res.statusCode >= 400) return 'warn';
+            return 'info'; // Default: info level for success responses
+          },
+
+          // -------------------------------------------------------------
+          // Auto-logging: skip health/metrics endpoints
+          // -------------------------------------------------------------
+          autoLogging: {
+            ignore: (req) =>
+              req.url?.startsWith('/health') === true ||
+              req.url?.startsWith('/metrics') === true,
+          },
+
+          // -------------------------------------------------------------
+          // Redact sensitive headers from logs
+          // -------------------------------------------------------------
+          redact: {
+            paths: [
+              'req.headers.authorization',
+              'req.headers.cookie',
+              'req.headers["x-api-key"]',
+            ],
+            censor: '[REDACTED]',
+          },
+
+          // -------------------------------------------------------------
+          // Quiet suppression of pino-http startup logs
+          // -------------------------------------------------------------
+          quietReqLogger: true,
+
+          // -------------------------------------------------------------
+          // Transport: pino-pretty in dev, raw JSON in prod
+          // -------------------------------------------------------------
+          ...(configService.nodeEnv !== 'production'
+            ? {
+                transport: {
+                  target: 'pino-pretty',
+                  options: {
+                    colorize: true,
+                    singleLine: false,
+                    translateTime: 'SYS:standard',
+                    ignore: 'pid,hostname',
+                    messageFormat: '[{module}] {msg}',
+                  },
+                },
+              }
+            : {
+                // Production: raw JSON, no transport — output goes to stdout
+                // for collection by the log aggregator (Datadog, ELK, etc.).
+              }),
         },
-        transport:
-          process.env.NODE_ENV !== 'production'
-            ? { target: 'pino-pretty', options: { colorize: true, singleLine: true } }
-            : undefined,
-        serializers: {
-          req: (req) => ({
-            id: req.id,
-            method: req.method,
-            url: req.url,
-          }),
-          res: (res) => ({
-            statusCode: res.statusCode,
-          }),
-        },
-      },
+
+        // Exclude health/metrics from pino-http middleware entirely
+        exclude: ['/health', '/metrics'],
+      }),
     }),
   ],
-  exports: [PinoLoggerModule],
+
+  providers: [
+    // AppLogger wraps PinoLogger with automatic correlation_id + module injection
+    AppLogger,
+  ],
+
+  exports: [PinoLoggerModule, AppLogger],
 })
 export class LoggerModule {}
