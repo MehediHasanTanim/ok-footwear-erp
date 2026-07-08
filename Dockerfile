@@ -98,6 +98,6 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=15s \
 
 # --- Runtime ---
 # tini: forward signals (SIGTERM → Node.js graceful shutdown)
-# tsconfig-paths/register: resolve @/ and @modules/ path aliases at runtime
+# Path aliases (@/*) are resolved at build time by tsc-alias — no runtime preload needed.
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["node", "-r", "tsconfig-paths/register", "dist/main"]
+CMD ["node", "dist/main"]

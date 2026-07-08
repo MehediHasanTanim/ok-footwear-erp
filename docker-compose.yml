@@ -14,8 +14,6 @@
 #   docker compose down -v                # Also remove named volumes
 # =============================================================================
 
-version: '3.8'
-
 services:
   # ---------------------------------------------------------------------------
   # PostgreSQL 16 — Primary database
@@ -31,7 +29,7 @@ services:
       POSTGRES_DB: ok_footwear_erp
 
     ports:
-      - '5432:5432'
+      - '5433:5432'
 
     volumes:
       - pg_data:/var/lib/postgresql/data
@@ -119,6 +117,13 @@ services:
       DB_NAME: ok_footwear_erp
       DB_USER: ok_footwear
       DB_PASSWORD: ok_footwear_dev
+
+      # Auth: PostgreSQL 16 defaults to scram-sha-256
+      AUTH_TYPE: scram-sha-256
+      AUTH_USER: ok_footwear
+
+      # Listen port must match the container port in 'ports' mapping
+      LISTEN_PORT: '6432'
 
       # Pool configuration
       POOL_MODE: transaction

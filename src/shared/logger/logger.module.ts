@@ -121,24 +121,30 @@ import { AppLogger } from './app-logger.service';
 
           // -------------------------------------------------------------
           // Transport: pino-pretty in dev, raw JSON in prod
+          // Gracefully falls back to JSON if pino-pretty is not installed
+          // (e.g., stripped by npm prune --production).
           // -------------------------------------------------------------
           ...(configService.nodeEnv !== 'production'
-            ? {
-                transport: {
-                  target: 'pino-pretty',
-                  options: {
-                    colorize: true,
-                    singleLine: false,
-                    translateTime: 'SYS:standard',
-                    ignore: 'pid,hostname',
-                    messageFormat: '[{module}] {msg}',
-                  },
-                },
-              }
-            : {
-                // Production: raw JSON, no transport — output goes to stdout
-                // for collection by the log aggregator (Datadog, ELK, etc.).
-              }),
+            ? (() => {
+                try {
+                  require.resolve('pino-pretty');
+                  return {
+                    transport: {
+                      target: 'pino-pretty',
+                      options: {
+                        colorize: true,
+                        singleLine: false,
+                        translateTime: 'SYS:standard',
+                        ignore: 'pid,hostname',
+                        messageFormat: '[{module}] {msg}',
+                      },
+                    },
+                  };
+                } catch {
+                  return {};
+                }
+              })()
+            : {}),
         },
 
         // Exclude health/metrics from pino-http middleware entirely

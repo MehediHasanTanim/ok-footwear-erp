@@ -27,7 +27,7 @@ export const databaseConfig = registerAs(
 
 export const databaseConfigSchema = Joi.object({
   DATABASE_URL: Joi.string()
-    .uri({ scheme: [/^postgres(ql)?$/] })
+    .uri({ scheme: ['postgres', 'postgresql'] })
     .required()
     .messages({
       'string.uri': 'DATABASE_URL must be a valid postgresql:// URI',
@@ -35,7 +35,7 @@ export const databaseConfigSchema = Joi.object({
     }),
 
   DIRECT_DATABASE_URL: Joi.string()
-    .uri({ scheme: [/^postgres(ql)?$/] })
+    .uri({ scheme: ['postgres', 'postgresql'] })
     .required()
     .messages({
       'string.uri': 'DIRECT_DATABASE_URL must be a valid postgresql:// URI',

@@ -28,7 +28,7 @@ export const redisConfig = registerAs(
 
 export const redisConfigSchema = Joi.object({
   REDIS_URL: Joi.string()
-    .uri({ scheme: [/^redis(s)?$/] })
+    .uri({ scheme: ['redis', 'rediss'] })
     .default('redis://localhost:7379')
     .messages({
       'string.uri': 'REDIS_URL must be a valid redis:// or rediss:// URI',
