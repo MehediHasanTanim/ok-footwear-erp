@@ -37,10 +37,7 @@ beforeAll(async () => {
   }
 
   prisma = new PrismaClient({
-    datasourceUrl: databaseUrl,
-    // Limit connection pool to 1 — ensures all queries in a test file
-    // use the same connection, which is required for transaction rollback
-    // to work correctly.
+    // Use datasources.db.url (not datasourceUrl) — Prisma v5 forbids both.
     datasources: {
       db: {
         url: databaseUrl,
