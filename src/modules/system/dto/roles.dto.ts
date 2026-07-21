@@ -29,3 +29,29 @@ export class UpdateRoleDto {
   @IsString()
   description?: string;
 }
+
+export class AddPermissionDto {
+  @ApiPropertyOptional({
+    description: 'Permission UUID (use this OR module+action)',
+    example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+  })
+  @IsOptional()
+  @IsString()
+  permissionId?: string;
+
+  @ApiPropertyOptional({
+    description: 'Module name (use with action instead of permissionId)',
+    example: 'orders',
+  })
+  @IsOptional()
+  @IsString()
+  module?: string;
+
+  @ApiPropertyOptional({
+    description: 'Action name (use with module instead of permissionId)',
+    example: 'read',
+  })
+  @IsOptional()
+  @IsString()
+  action?: string;
+}

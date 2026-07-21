@@ -11,6 +11,8 @@ import { AuthController } from './controllers/auth.controller';
 import { UsersController } from './controllers/users.controller';
 import { RolesController } from './controllers/roles.controller';
 import { NotificationsController } from './controllers/notifications.controller';
+import { AuditController } from './controllers/audit.controller';
+import { ComplianceController } from './controllers/compliance.controller';
 import { AuthService } from './services/auth.service';
 import { TotpService } from './services/totp.service';
 import { AuditService } from './services/audit.service';
@@ -43,7 +45,7 @@ import { ComplianceService } from './services/compliance.service';
       },
     }),
   ],
-  controllers: [HealthController, AuthController, UsersController, RolesController, NotificationsController],
+  controllers: [HealthController, AuthController, UsersController, RolesController, NotificationsController, AuditController, ComplianceController],
   providers: [AuthService, TotpService, AuditService, UsersService, RolesService, NotificationsService, SSEService, ComplianceService, JwtAuthGuard, RbacGuard],
   exports: [AuthService, TotpService, AuditService, UsersService, RolesService, NotificationsService, ComplianceService, JwtModule, JwtAuthGuard, RbacGuard],
 })

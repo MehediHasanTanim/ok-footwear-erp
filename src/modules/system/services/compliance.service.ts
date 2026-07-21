@@ -22,6 +22,7 @@ import { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { PrismaService } from '@shared/database/prisma.service';
 import { AuditService } from './audit.service';
+import { CorrelationStore } from '@shared/logger/correlation-store';
 import { REDIS_AUTH } from '@infrastructure/redis/redis.constants';
 import { EMAIL_QUEUE } from '@infrastructure/queue/queue.constants';
 
@@ -53,11 +54,15 @@ export interface UpdateComplianceDto {
 interface ComplianceItem {
   id: string;
   name: string;
+  description: string | null;
   category: string | null;
-  expiry_date: Date;
+  expiry_date: string;
   responsible_user_id: string | null;
   alert_days: number;
   status: string;
+  document_url: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 interface UserEmail {
@@ -91,13 +96,21 @@ export class ComplianceService {
 
   async findAll() {
     return this.prisma.$queryRawUnsafe<ComplianceItem[]>(
-      `SELECT * FROM sys.compliance_items ORDER BY expiry_date ASC`,
+      `SELECT id, name, description, category, expiry_date::text AS expiry_date,
+              responsible_user_id, alert_days, status, document_url,
+              created_at::text AS created_at, updated_at::text AS updated_at
+       FROM sys.compliance_items
+       ORDER BY expiry_date ASC`,
     );
   }
 
   async findOne(id: string) {
     const rows = await this.prisma.$queryRawUnsafe<ComplianceItem[]>(
-      'SELECT * FROM sys.compliance_items WHERE id = $1::uuid',
+      `SELECT id, name, description, category, expiry_date::text AS expiry_date,
+              responsible_user_id, alert_days, status, document_url,
+              created_at::text AS created_at, updated_at::text AS updated_at
+       FROM sys.compliance_items
+       WHERE id = $1::uuid`,
       id,
     );
     return rows[0] ?? null;
@@ -142,6 +155,13 @@ export class ComplianceService {
     return this.findOne(id);
   }
 
+  async delete(id: string): Promise<void> {
+    await this.prisma.$executeRawUnsafe(
+      `DELETE FROM sys.compliance_items WHERE id = $1::uuid`,
+      id,
+    );
+  }
+
   // =========================================================================
   // Nightly Cron — 02:00 Asia/Dhaka
   // Wire externally via setInterval or k8s CronJob.
@@ -169,7 +189,9 @@ export class ComplianceService {
       // 2. Query using partial index WHERE status = 'valid'
       // -------------------------------------------------------------------
       const items = await this.prisma.$queryRawUnsafe<ComplianceItem[]>(
-        `SELECT id, name, category, expiry_date, responsible_user_id, alert_days, status
+        `SELECT id, name, description, category, expiry_date::text AS expiry_date,
+                responsible_user_id, alert_days, status, document_url,
+                created_at::text AS created_at, updated_at::text AS updated_at
          FROM sys.compliance_items
          WHERE status = 'valid'
            AND expiry_date <= CURRENT_DATE + alert_days`,
@@ -261,6 +283,7 @@ export class ComplianceService {
             changedBy: null,
             ipAddress: null,
             userAgent: null,
+            correlationId: CorrelationStore.getStore()?.correlationId,
           });
         } catch (err) {
           this.logger.warn(`Audit write failed for compliance item ${item.id}`);

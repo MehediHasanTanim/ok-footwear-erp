@@ -14,17 +14,19 @@ import {
   HttpCode,
   UseGuards,
   UnauthorizedException,
+  NotFoundException,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { Request, Response } from 'express';
 import {
   AuthService,
-  LoginDto,
   LoginResult,
   LoginSuccess,
 } from '../services/auth.service';
 import { TotpService } from '../services/totp.service';
 import { JwtAuthGuard, JwtPayload } from '@common/guards/jwt-auth.guard';
+import { LoginDto, LoginResponseDto, MfaRequiredDto, ChangePasswordDto } from '../dto/auth.dto';
+import { PrismaService } from '@shared/database/prisma.service';
 
 const REFRESH_COOKIE = {
   httpOnly: true,
@@ -48,13 +50,16 @@ export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly totpService: TotpService,
+    private readonly prisma: PrismaService,
   ) {}
 
   @Post('login')
   @HttpCode(200)
-  @ApiOperation({ summary: 'Authenticate with email + password' })
-  @ApiResponse({ status: 200, description: 'Login successful' })
-  @ApiResponse({ status: 401, description: 'Invalid credentials' })
+  @ApiOperation({ summary: 'Authenticate with email + password (+ optional TOTP)' })
+  @ApiBody({ type: LoginDto, description: 'Login credentials' })
+  @ApiResponse({ status: 200, description: 'Login successful', type: LoginResponseDto })
+  @ApiResponse({ status: 200, description: 'MFA required', type: MfaRequiredDto })
+  @ApiResponse({ status: 401, description: 'Invalid credentials or account locked' })
   async login(
     @Body() dto: LoginDto,
     @Req() req: Request,
@@ -107,11 +112,62 @@ export class AuthController {
   @Get('me')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get current user profile' })
+  @ApiOperation({ summary: 'Get current user profile (JWT payload)' })
   @ApiResponse({ status: 200, description: 'User profile' })
   @ApiResponse({ status: 401, description: 'Missing or invalid token' })
   getMe(@Req() req: Request): JwtPayload {
     return (req as unknown as Record<string, unknown>)['user'] as JwtPayload;
+  }
+
+  @Get('me/profile')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get full user profile including roles and permissions' })
+  @ApiResponse({ status: 200, description: 'Full user profile with roles' })
+  @ApiResponse({ status: 401, description: 'Missing or invalid token' })
+  async getMyProfile(@Req() req: Request) {
+    const jwt = (req as unknown as Record<string, unknown>)['user'] as JwtPayload;
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: jwt.sub },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        middleName: true,
+        lastName: true,
+        isActive: true,
+        employeeId: true,
+        lastLoginAt: true,
+        createdAt: true,
+        userRoles: {
+          select: {
+            role: {
+              select: {
+                id: true,
+                name: true,
+                description: true,
+                isSystem: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException({
+        statusCode: 404,
+        message: 'User not found',
+      });
+    }
+
+    return {
+      ...user,
+      userRoles: undefined,
+      roles: user.userRoles.map((ur) => ur.role),
+      permissions: jwt.permissions,
+    };
   }
 
   @Post('2fa/setup')
@@ -148,5 +204,35 @@ export class AuthController {
   disable2fa(): { message: string } {
     this.totpService.disable2fa();
     return { message: '2FA disabled' };
+  }
+
+  // =========================================================================
+  // POST /auth/change-password
+  // =========================================================================
+
+  @Post('change-password')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(200)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Change password (requires current password)' })
+  @ApiResponse({ status: 200, description: 'Password changed successfully' })
+  @ApiResponse({ status: 401, description: 'Current password is incorrect' })
+  async changePassword(
+    @Body() dto: ChangePasswordDto,
+    @Req() req: Request,
+  ): Promise<{ message: string }> {
+    const jwt = (req as unknown as Record<string, unknown>)['user'] as JwtPayload;
+
+    await this.authService.changePassword(
+      jwt.sub,
+      dto.currentPassword,
+      dto.newPassword,
+      {
+        ipAddress: req.ip ?? undefined,
+        userAgent: req.headers['user-agent'] ?? undefined,
+      },
+    );
+
+    return { message: 'Password changed successfully. Please log in again on all devices.' };
   }
 }

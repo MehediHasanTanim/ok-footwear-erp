@@ -131,16 +131,18 @@ describe('RolesService', () => {
     it('creates role_permission and invalidates cache for affected users', async () => {
       mockPrisma.role.findUnique.mockResolvedValue({ id: 'r1' });
       mockPrisma.permission.findUnique.mockResolvedValue({ id: 'p1', module: 'orders', action: 'read' });
+      mockPrisma.rolePermission.findUnique.mockResolvedValue(null); // no existing assignment
 
       // 2 users have this role
       mockPrisma.userRole.findMany.mockResolvedValue([
         { userId: 'u1' }, { userId: 'u2' },
       ]);
 
-      await service.addPermission('r1', 'p1');
+      await service.addPermission('r1', { permissionId: 'p1' });
 
       expect(mockPrisma.rolePermission.create).toHaveBeenCalledWith({
         data: { roleId: 'r1', permissionId: 'p1' },
+        include: { permission: { select: { module: true, action: true } } },
       });
 
       // Verify pipeline was used for batch DEL
@@ -151,7 +153,7 @@ describe('RolesService', () => {
       mockPrisma.role.findUnique.mockResolvedValue({ id: 'r1' });
       mockPrisma.permission.findUnique.mockResolvedValue(null);
 
-      await expect(service.addPermission('r1', 'p99')).rejects.toThrow(NotFoundException);
+      await expect(service.addPermission('r1', { permissionId: 'p99' })).rejects.toThrow(NotFoundException);
     });
   });
 

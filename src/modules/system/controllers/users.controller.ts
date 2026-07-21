@@ -19,9 +19,8 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RbacGuard, Permissions } from '@common/guards/rbac.guard';
-import { PaginationDto } from '@common/dto/pagination.dto';
 import { UsersService } from '../services/users.service';
-import { CreateUserDto, UpdateUserDto } from '../dto/users.dto';
+import { CreateUserDto, UpdateUserDto, UserQueryDto } from '../dto/users.dto';
 
 @ApiTags('users')
 @ApiBearerAuth()
@@ -35,11 +34,11 @@ export class UsersController {
   // =========================================================================
 
   @Get()
-  @Permissions('system.users.read')
-  @ApiOperation({ summary: 'List users (paginated)' })
+  @Permissions('system:read')
+  @ApiOperation({ summary: 'List users (paginated, searchable)' })
   @ApiResponse({ status: 200, description: 'Paginated user list' })
-  findAll(@Query() pagination: PaginationDto) {
-    return this.usersService.findAll(pagination);
+  findAll(@Query() query: UserQueryDto) {
+    return this.usersService.findAll(query);
   }
 
   // =========================================================================
@@ -47,7 +46,7 @@ export class UsersController {
   // =========================================================================
 
   @Get(':id')
-  @Permissions('system.users.read')
+  @Permissions('system:read')
   @ApiOperation({ summary: 'Get user by ID' })
   @ApiResponse({ status: 200, description: 'User detail' })
   @ApiResponse({ status: 404, description: 'User not found' })
@@ -60,7 +59,7 @@ export class UsersController {
   // =========================================================================
 
   @Post()
-  @Permissions('system.users.write')
+  @Permissions('system:create')
   @ApiOperation({ summary: 'Create a new user' })
   @ApiResponse({ status: 201, description: 'User created' })
   @ApiResponse({ status: 409, description: 'Email already exists' })
@@ -74,7 +73,7 @@ export class UsersController {
   // =========================================================================
 
   @Patch(':id')
-  @Permissions('system.users.write')
+  @Permissions('system:update')
   @ApiOperation({ summary: 'Update user fields' })
   @ApiResponse({ status: 200, description: 'User updated' })
   @ApiResponse({ status: 404, description: 'User not found' })
@@ -87,7 +86,7 @@ export class UsersController {
   // =========================================================================
 
   @Delete(':id')
-  @Permissions('system.users.write')
+  @Permissions('system:delete')
   @HttpCode(204)
   @ApiOperation({ summary: 'Soft-delete a user (sets is_active=false)' })
   @ApiResponse({ status: 204, description: 'User deactivated' })
@@ -101,7 +100,7 @@ export class UsersController {
   // =========================================================================
 
   @Post(':id/roles')
-  @Permissions('system.users.write')
+  @Permissions('system:update')
   @HttpCode(200)
   @ApiOperation({ summary: 'Assign a role to a user' })
   @ApiResponse({ status: 200, description: 'Role assigned' })
@@ -117,7 +116,7 @@ export class UsersController {
   // =========================================================================
 
   @Delete(':id/roles/:roleId')
-  @Permissions('system.users.write')
+  @Permissions('system:delete')
   @HttpCode(204)
   @ApiOperation({ summary: 'Remove a role from a user' })
   @ApiResponse({ status: 204, description: 'Role removed' })
@@ -133,7 +132,7 @@ export class UsersController {
   // =========================================================================
 
   @Post(':id/link-employee')
-  @Permissions('system.users.write')
+  @Permissions('system:update')
   @HttpCode(200)
   @ApiOperation({ summary: 'Link user to an employee record' })
   @ApiResponse({ status: 200, description: 'Employee linked' })

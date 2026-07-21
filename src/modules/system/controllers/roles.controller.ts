@@ -19,7 +19,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RbacGuard, Permissions } from '@common/guards/rbac.guard';
 import { RolesService } from '../services/roles.service';
-import { CreateRoleDto, UpdateRoleDto } from '../dto/roles.dto';
+import { CreateRoleDto, UpdateRoleDto, AddPermissionDto } from '../dto/roles.dto';
 
 @ApiTags('roles')
 @ApiBearerAuth()
@@ -33,10 +33,21 @@ export class RolesController {
   // =========================================================================
 
   @Get('roles')
-  @Permissions('system.roles.read')
+  @Permissions('system:read')
   @ApiOperation({ summary: 'List all roles' })
   findAll() {
     return this.rolesService.findAll();
+  }
+
+  // =========================================================================
+  // GET /roles/:id
+  // =========================================================================
+
+  @Get('roles/:id')
+  @Permissions('system:read')
+  @ApiOperation({ summary: 'Get a role with its permissions' })
+  findOne(@Param('id') id: string) {
+    return this.rolesService.findOne(id);
   }
 
   // =========================================================================
@@ -44,7 +55,7 @@ export class RolesController {
   // =========================================================================
 
   @Post('roles')
-  @Permissions('system.roles.write')
+  @Permissions('system:create')
   @HttpCode(201)
   @ApiOperation({ summary: 'Create a new role' })
   create(@Body() dto: CreateRoleDto) {
@@ -56,7 +67,7 @@ export class RolesController {
   // =========================================================================
 
   @Patch('roles/:id')
-  @Permissions('system.roles.write')
+  @Permissions('system:update')
   @ApiOperation({ summary: 'Update a role' })
   update(@Param('id') id: string, @Body() dto: UpdateRoleDto) {
     return this.rolesService.update(id, dto);
@@ -67,7 +78,7 @@ export class RolesController {
   // =========================================================================
 
   @Delete('roles/:id')
-  @Permissions('system.roles.write')
+  @Permissions('system:delete')
   @HttpCode(204)
   @ApiOperation({ summary: 'Delete a role (no users assigned)' })
   async delete(@Param('id') id: string): Promise<void> {
@@ -79,14 +90,14 @@ export class RolesController {
   // =========================================================================
 
   @Post('roles/:id/permissions')
-  @Permissions('system.roles.write')
+  @Permissions('system:update')
   @HttpCode(200)
-  @ApiOperation({ summary: 'Add a permission to a role' })
+  @ApiOperation({ summary: 'Add a permission to a role (by permissionId or module+action)' })
   addPermission(
     @Param('id') roleId: string,
-    @Body('permissionId') permissionId: string,
+    @Body() body: AddPermissionDto,
   ) {
-    return this.rolesService.addPermission(roleId, permissionId);
+    return this.rolesService.addPermission(roleId, body);
   }
 
   // =========================================================================
@@ -94,7 +105,7 @@ export class RolesController {
   // =========================================================================
 
   @Delete('roles/:id/permissions/:permId')
-  @Permissions('system.roles.write')
+  @Permissions('system:delete')
   @HttpCode(204)
   @ApiOperation({ summary: 'Remove a permission from a role' })
   async removePermission(
@@ -105,11 +116,23 @@ export class RolesController {
   }
 
   // =========================================================================
+  // GET /permissions
+  // =========================================================================
+
+  @Get('permissions')
+  @Permissions('system:read')
+  @ApiOperation({ summary: 'List all available permissions with IDs' })
+  @ApiResponse({ status: 200, description: 'List of permissions' })
+  findAllPermissions() {
+    return this.rolesService.findAllPermissions();
+  }
+
+  // =========================================================================
   // GET /permissions/matrix
   // =========================================================================
 
   @Get('permissions/matrix')
-  @Permissions('system.roles.read')
+  @Permissions('system:read')
   @ApiOperation({ summary: 'Get permission matrix (modules × actions)' })
   @ApiResponse({ status: 200, description: 'Permission matrix' })
   getPermissionMatrix() {

@@ -33,6 +33,7 @@ import { PrismaService } from '@shared/database/prisma.service';
 import { REDIS_AUTH } from '@infrastructure/redis/redis.constants';
 import { TotpService } from './totp.service';
 import { AuditService } from './audit.service';
+import { CorrelationStore } from '@shared/logger/correlation-store';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -561,6 +562,127 @@ export class AuthService {
   }
 
   // =========================================================================
+  // Change Password
+  // =========================================================================
+
+  /**
+   * Change the authenticated user's password.
+   *
+   * Security properties:
+   *   - Verifies current password before allowing change
+   *   - Hashes new password with argon2id
+   *   - Revokes ALL refresh tokens (forces re-login on all devices)
+   *   - Invalidates Redis permissions cache
+   *   - Writes audit log
+   */
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+    metadata?: { ipAddress?: string | null; userAgent?: string | null },
+  ): Promise<void> {
+    const ip = metadata?.ipAddress ?? null;
+    const ua = metadata?.userAgent ?? null;
+
+    // -------------------------------------------------------------------
+    // Step 1: Load user with password hash
+    // -------------------------------------------------------------------
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        passwordHash: true,
+      },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException({
+        statusCode: 401,
+        message: 'User not found',
+      });
+    }
+
+    // -------------------------------------------------------------------
+    // Step 2: Verify current password
+    // -------------------------------------------------------------------
+    const isValid = await argon2.verify(user.passwordHash, currentPassword);
+
+    if (!isValid) {
+      await this.auditService.log({
+        tableName: 'auth_events',
+        recordId: userId,
+        action: 'INSERT',
+        newValue: {
+          event: 'password_change_failed',
+          email: user.email,
+          reason: 'wrong_current_password',
+          ip: ip ?? undefined,
+          user_agent: ua ?? undefined,
+        },
+        changedBy: userId,
+        ipAddress: ip,
+        userAgent: ua,
+        correlationId: CorrelationStore.getStore()?.correlationId,
+      });
+
+      throw new UnauthorizedException({
+        statusCode: 401,
+        message: 'Current password is incorrect',
+      });
+    }
+
+    // -------------------------------------------------------------------
+    // Step 3: Hash new password
+    // -------------------------------------------------------------------
+    const newHash = await argon2.hash(newPassword);
+
+    // -------------------------------------------------------------------
+    // Step 4: Update password + revoke all refresh tokens in a transaction
+    // -------------------------------------------------------------------
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: userId },
+        data: { passwordHash: newHash },
+      }),
+      this.prisma.refreshToken.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+    ]);
+
+    // -------------------------------------------------------------------
+    // Step 5: Invalidate permissions cache
+    // -------------------------------------------------------------------
+    await this.invalidatePermissions(userId);
+
+    // -------------------------------------------------------------------
+    // Step 6: Audit log
+    // -------------------------------------------------------------------
+    try {
+      await this.auditService.log({
+        tableName: 'auth_events',
+        recordId: userId,
+        action: 'INSERT',
+        newValue: {
+          event: 'password_changed',
+          email: user.email,
+          ip: ip ?? undefined,
+          user_agent: ua ?? undefined,
+        },
+        changedBy: userId,
+        ipAddress: ip,
+        userAgent: ua,
+        correlationId: CorrelationStore.getStore()?.correlationId,
+      });
+    } catch (err) {
+      this.logger.error('Failed to write password_changed audit log', (err as Error).stack);
+    }
+
+    this.logger.log(`Password changed for user ${userId}`);
+  }
+
+  // =========================================================================
   // Permissions (Redis-cached, 300s TTL)
   // =========================================================================
 
@@ -685,6 +807,7 @@ export class AuthService {
         changedBy: userId,
         ipAddress: ip,
         userAgent,
+        correlationId: CorrelationStore.getStore()?.correlationId,
       });
     } catch (err) {
       this.logger.error('Failed to write login_success audit log', (err as Error).stack);
@@ -713,6 +836,7 @@ export class AuthService {
         },
         ipAddress: ip,
         userAgent,
+        correlationId: CorrelationStore.getStore()?.correlationId,
       });
     } catch (err) {
       this.logger.error('Failed to write token_replay audit log', (err as Error).stack);
@@ -741,6 +865,7 @@ export class AuthService {
         },
         ipAddress: ip,
         userAgent,
+        correlationId: CorrelationStore.getStore()?.correlationId,
       });
     } catch (err) {
       this.logger.error('Failed to write login_failed audit log', (err as Error).stack);

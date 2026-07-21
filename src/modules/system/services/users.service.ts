@@ -13,8 +13,7 @@ import {
 import * as argon2 from 'argon2';
 import { PrismaService } from '@shared/database/prisma.service';
 import { AuthService } from './auth.service';
-import { CreateUserDto, UpdateUserDto } from '../dto/users.dto';
-import { PaginationDto } from '@common/dto/pagination.dto';
+import { CreateUserDto, UpdateUserDto, UserQueryDto } from '../dto/users.dto';
 
 @Injectable()
 export class UsersService {
@@ -29,15 +28,26 @@ export class UsersService {
   // CRUD
   // =========================================================================
 
-  async findAll(pagination: PaginationDto) {
-    const { page, limit } = pagination;
+  async findAll(query: UserQueryDto) {
+    const { page, limit, search } = query;
     const skip = (page - 1) * limit;
+
+    const where: Record<string, unknown> = { deletedAt: null };
+
+    if (search) {
+      where['OR'] = [
+        { email: { contains: search, mode: 'insensitive' } },
+        { firstName: { contains: search, mode: 'insensitive' } },
+        { middleName: { contains: search, mode: 'insensitive' } },
+        { lastName: { contains: search, mode: 'insensitive' } },
+      ];
+    }
 
     const [users, total] = await Promise.all([
       this.prisma.user.findMany({
         skip,
         take: limit,
-        where: { deletedAt: null },
+        where,
         select: {
           id: true,
           email: true,
@@ -54,7 +64,7 @@ export class UsersService {
         },
         orderBy: { createdAt: 'desc' },
       }),
-      this.prisma.user.count({ where: { deletedAt: null } }),
+      this.prisma.user.count({ where }),
     ]);
 
     return {
@@ -134,7 +144,18 @@ export class UsersService {
       },
     });
 
-    this.logger.log(`User created: ${user.id}`);
+    // Assign roles if provided
+    if (dto.roleIds && dto.roleIds.length > 0) {
+      await this.prisma.userRole.createMany({
+        data: dto.roleIds.map((roleId) => ({ userId: user.id, roleId })),
+        skipDuplicates: true,
+      });
+
+      // Invalidate permissions cache for fresh role assignments
+      await this.authService.invalidatePermissions(user.id);
+    }
+
+    this.logger.log(`User created: ${user.id}${dto.roleIds?.length ? ` with ${dto.roleIds.length} role(s)` : ''}`);
     return user;
   }
 
@@ -181,6 +202,18 @@ export class UsersService {
         updatedAt: true,
       },
     });
+
+    // Sync roles if provided (replace all)
+    if (dto.roleIds !== undefined) {
+      await this.prisma.$transaction([
+        this.prisma.userRole.deleteMany({ where: { userId: id } }),
+        this.prisma.userRole.createMany({
+          data: dto.roleIds.map((roleId) => ({ userId: id, roleId })),
+        }),
+      ]);
+
+      await this.authService.invalidatePermissions(id);
+    }
 
     this.logger.log(`User updated: ${id}`);
     return updated;

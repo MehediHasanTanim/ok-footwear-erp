@@ -6,6 +6,11 @@
 // Reads the required permission from @Permissions() decorator metadata,
 // then checks if the authenticated user (from JWT payload) has that
 // permission in their permissions[] array.
+//
+// Wildcard support:
+//   *:*           — Super Admin: bypasses ALL permission checks
+//   module:*      — Module-level wildcard: grants all actions in a module
+//                    e.g., system:* matches system:read, system:create, etc.
 // =============================================================================
 
 import {
@@ -21,7 +26,13 @@ export const PERMISSIONS_KEY = 'permissions';
 
 /**
  * Decorator: declare required permission for a route.
- * Usage: @Permissions('system.users.write')
+ * Supports wildcard patterns:
+ *   @Permissions('system:read')       — exact match
+ *   @Permissions('orders:create')     — exact match
+ *
+ * Wildcard matching is handled in the guard, not the decorator:
+ *   User with system:* can access @Permissions('system:read')
+ *   User with *:* can access everything (Super Admin)
  */
 export const Permissions = (...perms: string[]): MethodDecorator => {
   return (
@@ -56,22 +67,40 @@ export class RbacGuard implements CanActivate {
       | { permissions?: string[] }
       | undefined;
 
-    if (!user?.permissions) {
+    if (!user?.permissions || user.permissions.length === 0) {
       throw new ForbiddenException({
         statusCode: 403,
         message: 'Insufficient permissions',
+        detail: 'No permissions in token',
       });
     }
 
-    const hasPermission = requiredPerms.some((perm) =>
-      user.permissions!.includes(perm),
-    );
+    // -------------------------------------------------------------------
+    // Wildcard check: *:* grants access to everything (Super Admin)
+    // -------------------------------------------------------------------
+    if (user.permissions.includes('*:*')) {
+      return true;
+    }
+
+    // -------------------------------------------------------------------
+    // Permission matching with module-level wildcards
+    // -------------------------------------------------------------------
+    const hasPermission = requiredPerms.some((required) => {
+      // Direct match
+      if (user.permissions!.includes(required)) return true;
+
+      // Module wildcard: user has "system:*" and required is "system:read"
+      const [reqModule] = required.split(':');
+      if (reqModule && user.permissions!.includes(`${reqModule}:*`)) return true;
+
+      return false;
+    });
 
     if (!hasPermission) {
       throw new ForbiddenException({
         statusCode: 403,
         message: 'Insufficient permissions',
-        detail: `Required: ${requiredPerms.join(', ')}`,
+        detail: `Required: [${requiredPerms.join(', ')}]. User has ${user.permissions.length} permissions including wildcard: ${user.permissions.includes('*:*')}`,
       });
     }
 

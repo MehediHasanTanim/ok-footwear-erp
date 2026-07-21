@@ -11,7 +11,26 @@ import {
   IsOptional,
   MinLength,
   IsBoolean,
+  IsArray,
+  IsUUID,
+  ArrayMaxSize,
 } from 'class-validator';
+import { PaginationDto } from '@common/dto/pagination.dto';
+
+// ---------------------------------------------------------------------------
+// UserQueryDto — search + pagination for GET /users
+// ---------------------------------------------------------------------------
+
+export class UserQueryDto extends PaginationDto {
+  @ApiPropertyOptional({
+    description:
+      'Search across email, first name, middle name, and last name (case-insensitive partial match)',
+    example: 'kalam',
+  })
+  @IsOptional()
+  @IsString()
+  search?: string;
+}
 
 export class CreateUserDto {
   @ApiProperty({ example: 'user@okfootwear.com' })
@@ -35,6 +54,17 @@ export class CreateUserDto {
   @ApiProperty({ example: 'Kalam' })
   @IsString()
   lastName!: string;
+
+  @ApiPropertyOptional({
+    description: 'Optional list of role UUIDs to assign at creation time',
+    example: ['550e8400-e29b-41d4-a716-446655440000'],
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  @ArrayMaxSize(20)
+  roleIds?: string[];
 }
 
 export class UpdateUserDto {
@@ -68,4 +98,15 @@ export class UpdateUserDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Replace all roles for the user with this list of role UUIDs',
+    example: ['550e8400-e29b-41d4-a716-446655440000'],
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  @ArrayMaxSize(20)
+  roleIds?: string[];
 }
