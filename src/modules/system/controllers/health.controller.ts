@@ -1,4 +1,5 @@
 import { Controller, Get } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 
 /**
@@ -10,7 +11,12 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
  *
  * Currently returns a static response. In Sprint 3+, this will check
  * database and Redis connectivity before returning 200.
+ *
+ * @SkipThrottle() — the global ThrottlerGuard rate-limits all endpoints
+ * (100 req/min per IP). Health probes from Docker/K8s run every 30s and
+ * MUST NOT be throttled, or the container is marked unhealthy.
  */
+@SkipThrottle()
 @ApiTags('Health')
 @Controller('health')
 export class HealthController {

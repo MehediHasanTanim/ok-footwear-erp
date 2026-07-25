@@ -223,22 +223,29 @@ model LoginAttempt {
 // =============================================================================
 // SCHEMA: ord — Orders
 // =============================================================================
-// Buyers, orders, articles, quotations, samples, complaints.
+// Buyers, articles, orders, order lines, order milestones.
+//
+// Order lifecycle: draft → confirmed → in_production → qc → packed → delivered
+//   cancelled (terminal, reachable only from draft or confirmed)
+//
+// Sample approval gate: confirmed → in_production is BLOCKED unless
+//   sample_approved = true. All other transitions are unaffected.
+
+// ---------------------------------------------------------------------------
+// ord.buyers — Customer/buyer master data (soft-delete)
+// ---------------------------------------------------------------------------
 
 model Buyer {
-  id               String    @id @default(uuid()) @db.Uuid
-  name             String    @db.VarChar(200)
-  shortName        String?   @map("short_name") @db.VarChar(50)
-  contactPerson    String?   @map("contact_person") @db.VarChar(100)
-  email            String?   @db.VarChar(255)
-  phone            String?   @db.VarChar(30)
-  address          String?   @db.Text
-  country          String?   @db.VarChar(100)
-  paymentTerms     String?   @map("payment_terms") @db.VarChar(100)
-  isActive         Boolean   @default(true) @map("is_active")
-  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
-  deletedAt        DateTime? @map("deleted_at") @db.Timestamptz()
+  id            String    @id @default(uuid()) @db.Uuid
+  name          String    @db.VarChar(200)
+  currency      String    @db.VarChar(3) // ISO 4217
+  paymentTerms  PaymentTerm @map("payment_terms")
+  creditLimit   Decimal?  @map("credit_limit") @db.Decimal(15, 2)
+  country       String?   @db.VarChar(100)
+  isActive      Boolean   @default(true) @map("is_active")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt     DateTime? @map("deleted_at") @db.Timestamptz()
 
   orders Order[]
 
@@ -246,35 +253,146 @@ model Buyer {
   @@map("buyers")
 }
 
-model Order {
-  id              String    @id @default(uuid()) @db.Uuid
-  orderNumber     String    @unique @map("order_number") @db.VarChar(20)
-  buyerId         String    @map("buyer_id") @db.Uuid
-  orderDate       DateTime  @map("order_date") @db.Date
-  deliveryDate    DateTime? @map("delivery_date") @db.Date
-  status          OrderStatus @default(PENDING)
-  totalValue      Decimal?  @map("total_value") @db.Decimal(15, 2)
-  currency        String    @default("USD") @db.VarChar(3)
-  remarks         String?   @db.Text
-  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+enum PaymentTerm {
+  LC_SIGHT
+  LC_USANCE
+  TT_ADVANCE
+  TT_30_DAYS
 
-  buyer Buyer @relation(fields: [buyerId], references: [id])
+  @@schema("ord")
+}
+
+// ---------------------------------------------------------------------------
+// ord.articles — Article/style master data (soft-delete)
+// ---------------------------------------------------------------------------
+
+model Article {
+  id          String    @id @default(uuid()) @db.Uuid
+  code        String    @unique @db.VarChar(50)
+  description String    @db.Text
+  sizeSystem  String?   @map("size_system") @db.VarChar(20) // EU, UK, US
+  category    String?   @db.VarChar(100)
+  season      String?   @db.VarChar(50)
+  isActive    Boolean   @default(true) @map("is_active")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz()
+
+  orders Order[]
+
+  @@schema("ord")
+  @@map("articles")
+}
+
+// ---------------------------------------------------------------------------
+// ord.orders — Sales order header
+// ---------------------------------------------------------------------------
+
+model Order {
+  id                 String      @id @default(uuid()) @db.Uuid
+  orderNumber        String      @unique @map("order_number") @db.VarChar(20)
+  buyerId            String      @map("buyer_id") @db.Uuid
+  articleId          String      @map("article_id") @db.Uuid
+  status             OrderStatus @default(draft)
+  sampleApproved     Boolean     @default(false) @map("sample_approved")
+  totalQuantity      Int         @map("total_quantity")
+  deliveryDate       DateTime    @map("delivery_date") @db.Date
+  currency           String      @db.VarChar(3) // ISO 4217
+  confirmedAt        DateTime?   @map("confirmed_at") @db.Timestamptz()
+  confirmedBy        String?     @map("confirmed_by") @db.Uuid
+  cancelledAt        DateTime?   @map("cancelled_at") @db.Timestamptz()
+  cancellationReason String?     @map("cancellation_reason") @db.Text
+  createdAt          DateTime    @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt          DateTime    @updatedAt @map("updated_at") @db.Timestamptz()
+
+  buyer        Buyer            @relation(fields: [buyerId], references: [id])
+  article      Article          @relation(fields: [articleId], references: [id])
+  orderLines   OrderLine[]
+  milestones   OrderMilestone[]
 
   @@index([buyerId])
+  @@index([articleId])
   @@index([status])
+  @@index([deliveryDate])
   @@schema("ord")
   @@map("orders")
 }
 
 enum OrderStatus {
-  PENDING
-  CONFIRMED
-  IN_PRODUCTION
-  PARTIALLY_SHIPPED
-  SHIPPED
-  DELIVERED
-  CANCELLED
+  draft
+  confirmed
+  in_production
+  qc
+  packed
+  delivered
+  cancelled
+
+  @@schema("ord")
+}
+
+// ---------------------------------------------------------------------------
+// ord.order_lines — Per-size quantities and pricing for each order
+// ---------------------------------------------------------------------------
+
+model OrderLine {
+  id        String  @id @default(uuid()) @db.Uuid
+  orderId   String  @map("order_id") @db.Uuid
+  sizeLabel String  @map("size_label") @db.VarChar(20) // e.g. "38", "UK6"
+  quantity  Int
+  unitPrice Decimal @map("unit_price") @db.Decimal(12, 2)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@schema("ord")
+  @@map("order_lines")
+}
+
+// ---------------------------------------------------------------------------
+// ord.order_milestones — Back-calculated milestone planning rows
+// ---------------------------------------------------------------------------
+// Generated once on order confirmation (draft → confirmed), never on create.
+// planned_date is back-calculated from delivery_date using named lead-time
+// constants defined in OrdersService (see generateMilestones()).
+// status is set explicitly (pending → done when actual_date is set,
+// or marked overdue by a scheduled job comparing planned_date to NOW()).
+// We store status as a column rather than computing it, so query filtering
+// is efficient and status transitions are explicit.
+
+model OrderMilestone {
+  id            String           @id @default(uuid()) @db.Uuid
+  orderId       String           @map("order_id") @db.Uuid
+  milestoneType MilestoneType    @map("milestone_type")
+  plannedDate   DateTime         @map("planned_date") @db.Date
+  actualDate    DateTime?        @map("actual_date") @db.Date
+  status        MilestoneStatus  @default(pending)
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz()
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, milestoneType])
+  @@index([orderId])
+  @@index([plannedDate, status])
+  @@schema("ord")
+  @@map("order_milestones")
+}
+
+enum MilestoneType {
+  material_booking
+  pp_sample
+  bulk_start
+  qc
+  packing
+  shipment
+
+  @@schema("ord")
+}
+
+enum MilestoneStatus {
+  pending
+  done
+  overdue
 
   @@schema("ord")
 }
