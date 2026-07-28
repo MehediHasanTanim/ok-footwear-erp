@@ -194,4 +194,64 @@ export class NotificationsService {
 
     return rows.length;
   }
+
+  /**
+   * Notify all users with a specific role (by role name).
+   *
+   * Queries sys.user_roles → sys.roles to find all users with the given
+   * role name, then calls create() for each. Used by ComplaintsService
+   * for high/critical severity escalation.
+   *
+   * This is synchronous (not queued) — the business requirement is that
+   * management is notified in the same request cycle.
+   *
+   * @param roleName Role name to notify (e.g., 'management')
+   * @param title    Notification title
+   * @param body     Notification body
+   * @param type     Notification type (e.g., 'complaint.escalated')
+   * @param referenceId Optional reference (e.g., complaint ID)
+   */
+  async notifyRole(
+    roleName: string,
+    title: string,
+    body: string,
+    type: string,
+    referenceId?: string,
+  ): Promise<void> {
+    const users = await this.prisma.$queryRawUnsafe<Array<{ user_id: string }>>(
+      `SELECT ur.user_id
+       FROM sys.user_roles ur
+       JOIN sys.roles r ON r.id = ur.role_id
+       WHERE r.name = $1`,
+      roleName,
+    );
+
+    if (users.length === 0) {
+      this.logger.warn(`No users found for role '${roleName}' — notification skipped`);
+      return;
+    }
+
+    // Create notifications for all users with this role
+    for (const user of users) {
+      try {
+        await this.create({
+          userId: user.user_id,
+          title,
+          body,
+          type,
+          referenceId: referenceId ?? null,
+        });
+      } catch (err) {
+        // Single-user failure must not block other users
+        this.logger.error(
+          `Failed to notify user ${user.user_id} for role '${roleName}'`,
+          (err as Error).message,
+        );
+      }
+    }
+
+    this.logger.log(
+      `Notified ${users.length} users with role '${roleName}' (type: ${type})`,
+    );
+  }
 }

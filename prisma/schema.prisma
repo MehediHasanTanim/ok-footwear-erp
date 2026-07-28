@@ -309,6 +309,9 @@ model Order {
   article      Article          @relation(fields: [articleId], references: [id])
   orderLines   OrderLine[]
   milestones   OrderMilestone[]
+  quotations   Quotation[]
+  samples      Sample[]
+  complaints   Complaint[]
 
   @@index([buyerId])
   @@index([articleId])
@@ -394,6 +397,166 @@ enum MilestoneStatus {
   done
   overdue
 
+  @@schema("ord")
+}
+
+// ---------------------------------------------------------------------------
+// ord.quotations — Commercial offers linked to an order (Sprint 4)
+// ---------------------------------------------------------------------------
+
+enum QuotationStatus {
+  draft
+  sent
+  won
+  lost
+
+  @@schema("ord")
+}
+
+model Quotation {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  quotationNumber  String           @unique @map("quotation_number") @db.VarChar(20)
+  orderId          String           @map("order_id") @db.Uuid
+  order            Order            @relation(fields: [orderId], references: [id])
+  status           QuotationStatus  @default(draft)
+  bomVersionId     String?          @map("bom_version_id") @db.Uuid
+  winProbability   Decimal?         @map("win_probability") @db.Decimal(5, 2)
+  outcomeReason    String?          @map("outcome_reason") @db.Text
+  costBreakdown    Json?            @map("cost_breakdown")
+  totalCost        Decimal?         @map("total_cost") @db.Decimal(15, 2)
+  quotedPrice      Decimal?         @map("quoted_price") @db.Decimal(15, 2)
+  currency         String           @db.Char(3)
+  sentAt           DateTime?        @map("sent_at") @db.Timestamptz()
+  closedAt         DateTime?        @map("closed_at") @db.Timestamptz()
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@index([orderId])
+  @@map("quotations")
+  @@schema("ord")
+}
+
+// ---------------------------------------------------------------------------
+// ord.samples — PP/Counter/Size-set/TOP samples per order round (Sprint 4)
+// ---------------------------------------------------------------------------
+
+enum SampleType {
+  PP
+  counter
+  size_set
+  TOP
+
+  @@schema("ord")
+}
+
+enum ApprovalStatus {
+  pending
+  approved
+  rejected
+
+  @@schema("ord")
+}
+
+model Sample {
+  id             String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId        String         @map("order_id") @db.Uuid
+  order          Order          @relation(fields: [orderId], references: [id])
+  roundNumber    Int            @map("round_number")
+  sampleType     SampleType     @map("sample_type")
+  dispatchDate   DateTime?      @map("dispatch_date") @db.Date
+  receivedDate   DateTime?      @map("received_date") @db.Date
+  approvalStatus ApprovalStatus @map("approval_status") @default(pending)
+  approvedBy     String?        @map("approved_by") @db.Uuid
+  approvedAt     DateTime?      @map("approved_at") @db.Timestamptz()
+  remarks        String?        @db.Text
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime       @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@unique([orderId, roundNumber, sampleType])
+  @@index([orderId])
+  @@map("samples")
+  @@schema("ord")
+}
+
+// ---------------------------------------------------------------------------
+// ord.complaints + ord.capa_actions — Complaint tracking & CAPA (Sprint 4)
+// ---------------------------------------------------------------------------
+
+enum ComplaintType {
+  quality
+  delivery
+  packaging
+  documentation
+  other
+
+  @@schema("ord")
+}
+
+enum Severity {
+  low
+  medium
+  high
+  critical
+
+  @@schema("ord")
+}
+
+enum ComplaintStatus {
+  open
+  under_investigation
+  resolved
+
+  @@schema("ord")
+}
+
+model Complaint {
+  id               String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  complaintNumber  String          @unique @map("complaint_number") @db.VarChar(20)
+  orderId          String          @map("order_id") @db.Uuid
+  order            Order           @relation(fields: [orderId], references: [id])
+  type             ComplaintType
+  severity         Severity
+  description      String          @db.Text
+  rootCause        String?         @map("root_cause") @db.Text
+  status           ComplaintStatus @default(open)
+  raisedBy         String          @map("raised_by") @db.Uuid
+  raisedAt         DateTime        @map("raised_at") @default(now()) @db.Timestamptz()
+  resolvedAt       DateTime?       @map("resolved_at") @db.Timestamptz()
+  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt        DateTime        @updatedAt @map("updated_at") @db.Timestamptz()
+
+  capaActions      CapaAction[]
+
+  @@index([orderId])
+  @@index([status, severity])
+  @@map("complaints")
+  @@schema("ord")
+}
+
+enum CapaActionStatus {
+  open
+  in_progress
+  done
+
+  @@schema("ord")
+}
+
+model CapaAction {
+  id           String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  complaintId  String            @map("complaint_id") @db.Uuid
+  complaint    Complaint         @relation(fields: [complaintId], references: [id])
+  description  String            @db.Text
+  ownerId      String            @map("owner_id") @db.Uuid
+  dueDate      DateTime          @map("due_date") @db.Date
+  status       CapaActionStatus  @default(open)
+  closedAt     DateTime?         @map("closed_at") @db.Timestamptz()
+  evidence     String?           @db.Text
+  createdAt    DateTime          @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt    DateTime          @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@index([complaintId])
+  @@index([ownerId, status])
+  @@map("capa_actions")
   @@schema("ord")
 }
 
