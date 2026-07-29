@@ -15,9 +15,9 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '@shared/database/prisma.service';
-import { CorrelationStore } from '@shared/logger/correlation-store';
 
 import { OrdersService } from './orders.service';
+import { DocNumberService } from './doc-number.service';
 import {
   STATUS_TRANSITIONS,
   OrderStatus,
@@ -31,6 +31,8 @@ import {
   PP_SAMPLE_LEAD_DAYS,
   MATERIAL_BOOKING_LEAD_DAYS,
 } from './orders.service';
+
+const TEST_USER_ID = 'test-user-id';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -138,6 +140,10 @@ describe('OrdersService', () => {
     emit: mockEmit,
   };
 
+  const mockDocNumber = {
+    generate: jest.fn().mockResolvedValue('ORD-000042'),
+  };
+
   // -------------------------------------------------------------------
   // beforeEach — reset all mocks and build the testing module
   // -------------------------------------------------------------------
@@ -145,6 +151,7 @@ describe('OrdersService', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     callOrder = [];
+    mockDocNumber.generate.mockResolvedValue('ORD-000042');
 
     // Reset deep mocks on txClient
     mockTxClient.buyer.findUnique.mockReset();
@@ -162,17 +169,12 @@ describe('OrdersService', () => {
       async (cb: (tx: typeof mockTxClient) => unknown) => cb(mockTxClient),
     );
 
-    // Mock CorrelationStore to return a known userId for confirmedBy
-    jest.spyOn(CorrelationStore, 'getStore').mockReturnValue({
-      correlationId: 'test-correlation-id',
-      userId: 'test-user-id',
-    });
-
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         OrdersService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: EventEmitter2, useValue: mockEventEmitter },
+        { provide: DocNumberService, useValue: mockDocNumber },
       ],
     }).compile();
 
@@ -211,7 +213,7 @@ describe('OrdersService', () => {
       );
 
       await expect(
-        service.transitionStatus('test-order-id', { toStatus: 'confirmed' }),
+        service.transitionStatus('test-order-id', { toStatus: 'confirmed' }, TEST_USER_ID),
       ).resolves.toBeDefined();
 
       // Verify update was called with confirmed status
@@ -335,10 +337,7 @@ describe('OrdersService', () => {
       const formatted = `ORD-${String(seqNumber).padStart(6, '0')}`;
       let capturedCreateArgs: Record<string, unknown> | null = null;
 
-      // Mock the tx-level $queryRawUnsafe to return the doc number
-      mockTxClient.$queryRawUnsafe.mockResolvedValue([
-        { next_doc_number: formatted },
-      ]);
+      mockDocNumber.generate.mockResolvedValue(formatted);
 
       // Mock buyer/article validation in tx
       mockTxClient.buyer.findUnique.mockResolvedValue({
@@ -359,6 +358,21 @@ describe('OrdersService', () => {
           id: 'new-order-id',
           orderNumber: args.data.orderNumber,
           status: 'draft',
+          buyerId: 'test-buyer-id',
+          articleId: 'test-article-id',
+          sampleApproved: false,
+          totalQuantity: 100,
+          deliveryDate: new Date('2026-06-01'),
+          currency: 'USD',
+          confirmedAt: null,
+          confirmedBy: null,
+          cancelledAt: null,
+          cancellationReason: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          buyer: { name: 'Buyer', currency: 'USD' },
+          article: { code: 'ART', description: 'Article' },
+          orderLines: [{ id: 'l1', sizeLabel: '42', quantity: 100, unitPrice: 12.5 }],
         };
       });
 
@@ -401,12 +415,9 @@ describe('OrdersService', () => {
       expect(orderNumber).toBe('ORD-000042');
     });
 
-    it('should call $queryRawUnsafe exactly once per create() call', async () => {
-      // Reset before this specific test
-      mockTxClient.$queryRawUnsafe.mockReset();
-      mockTxClient.$queryRawUnsafe.mockResolvedValue([
-        { next_doc_number: 'ORD-000001' },
-      ]);
+    it('should call DocNumberService.generate exactly once per create() call', async () => {
+      mockDocNumber.generate.mockClear();
+      mockDocNumber.generate.mockResolvedValue('ORD-000001');
       mockTxClient.buyer.findUnique.mockResolvedValue({
         id: 'test-buyer-id',
         isActive: true,
@@ -421,6 +432,21 @@ describe('OrdersService', () => {
         id: 'new-order-id',
         orderNumber: 'ORD-000001',
         status: 'draft',
+        buyerId: 'test-buyer-id',
+        articleId: 'test-article-id',
+        sampleApproved: false,
+        totalQuantity: 100,
+        deliveryDate: new Date('2026-06-01'),
+        currency: 'USD',
+        confirmedAt: null,
+        confirmedBy: null,
+        cancelledAt: null,
+        cancellationReason: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        buyer: { name: 'Buyer', currency: 'USD' },
+        article: { code: 'ART', description: 'Article' },
+        orderLines: [],
       });
 
       await service.create({
@@ -432,8 +458,8 @@ describe('OrdersService', () => {
         orderLines: [{ sizeLabel: '42', quantity: 100, unitPrice: 12.5 }],
       });
 
-      // $queryRawUnsafe should be called exactly once — no double-consumption
-      expect(mockTxClient.$queryRawUnsafe).toHaveBeenCalledTimes(1);
+      expect(mockDocNumber.generate).toHaveBeenCalledTimes(1);
+      expect(mockDocNumber.generate).toHaveBeenCalledWith(mockTxClient, 'ORD');
     });
   });
 
@@ -478,7 +504,7 @@ describe('OrdersService', () => {
 
       await service.transitionStatus('order-confirm-event-id', {
         toStatus: 'confirmed',
-      });
+      }, TEST_USER_ID);
 
       // 1. emit was called exactly once
       expect(mockEmit).toHaveBeenCalledTimes(1);
@@ -526,7 +552,7 @@ describe('OrdersService', () => {
 
       await service.transitionStatus('test-order-id', {
         toStatus: 'confirmed',
-      });
+      }, TEST_USER_ID);
 
       const updateIndex = callOrder.indexOf('db_update');
       const emitIndex = callOrder.indexOf('event_emit');
@@ -589,7 +615,7 @@ describe('OrdersService', () => {
 
       await service.transitionStatus('milestone-order-id', {
         toStatus: 'confirmed',
-      });
+      }, TEST_USER_ID);
 
       if (!capturedData) return null;
       return {

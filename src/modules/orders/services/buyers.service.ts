@@ -7,7 +7,6 @@
 import {
   Injectable,
   NotFoundException,
-  ConflictException,
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '@shared/database/prisma.service';
@@ -17,6 +16,9 @@ import {
   UpdateBuyerDto,
   BuyerQueryDto,
 } from '../dto/buyers.dto';
+
+/** Minimum pg_trgm similarity score for fuzzy buyer name search. */
+const TRIGRAM_THRESHOLD = 0.15;
 
 @Injectable()
 export class BuyersService {
@@ -32,22 +34,6 @@ export class BuyersService {
     const { page, limit, search, dropdown } = query;
     const skip = (page - 1) * limit;
 
-    const where: Prisma.BuyerWhereInput = {
-      deletedAt: null,
-      isActive: true,
-    };
-
-    if (search) {
-      // Trigram search via raw condition — Prisma doesn't natively support
-      // pg_trgm operators, so we use a raw filter.
-      // The % operator is similarity (returns 0–1), we use a low threshold
-      // for fuzzy matching (0.15 catches 1–2 char typos).
-      where.name = {
-        contains: search,
-        mode: 'insensitive',
-      } as Prisma.StringFilter;
-    }
-
     const select = dropdown
       ? { id: true, name: true }
       : {
@@ -62,6 +48,15 @@ export class BuyersService {
           updatedAt: true,
         };
 
+    if (search) {
+      return this.findAllByTrigram(search, skip, limit, page, select);
+    }
+
+    const where: Prisma.BuyerWhereInput = {
+      deletedAt: null,
+      isActive: true,
+    };
+
     const [data, total] = await Promise.all([
       this.prisma.buyer.findMany({
         skip,
@@ -72,6 +67,70 @@ export class BuyersService {
       }),
       this.prisma.buyer.count({ where }),
     ]);
+
+    return {
+      data,
+      meta: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  /**
+   * Fuzzy search via pg_trgm similarity (threshold 0.15).
+   * Uses the GIN trigram index on ord.buyers.name.
+   */
+  private async findAllByTrigram(
+    search: string,
+    skip: number,
+    limit: number,
+    page: number,
+    select: Prisma.BuyerSelect,
+  ) {
+    const [idRows, countRows] = await Promise.all([
+      this.prisma.$queryRaw<{ id: string }[]>`
+        SELECT id
+        FROM ord.buyers
+        WHERE deleted_at IS NULL
+          AND is_active = true
+          AND similarity(name, ${search}) > ${TRIGRAM_THRESHOLD}
+        ORDER BY similarity(name, ${search}) DESC, created_at DESC
+        LIMIT ${limit} OFFSET ${skip}
+      `,
+      this.prisma.$queryRaw<{ count: bigint }[]>`
+        SELECT COUNT(*)::bigint AS count
+        FROM ord.buyers
+        WHERE deleted_at IS NULL
+          AND is_active = true
+          AND similarity(name, ${search}) > ${TRIGRAM_THRESHOLD}
+      `,
+    ]);
+
+    const ids = idRows.map((r) => r.id);
+    const total = Number(countRows[0]?.count ?? 0);
+
+    if (ids.length === 0) {
+      return {
+        data: [],
+        meta: {
+          page,
+          limit,
+          totalItems: total,
+          totalPages: Math.ceil(total / limit) || 0,
+        },
+      };
+    }
+
+    const rows = await this.prisma.buyer.findMany({
+      where: { id: { in: ids } },
+      select,
+    });
+
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const data = ids.map((id) => byId.get(id)).filter(Boolean);
 
     return {
       data,

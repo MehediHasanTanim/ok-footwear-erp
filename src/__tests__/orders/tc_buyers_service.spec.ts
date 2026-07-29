@@ -9,6 +9,7 @@
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
+import { plainToInstance } from 'class-transformer';
 import { BuyersService } from '@modules/orders/services/buyers.service';
 import { PrismaService } from '@shared/database/prisma.service';
 import { CreateBuyerDto, UpdateBuyerDto, BuyerQueryDto, PaymentTerm } from '@modules/orders/dto/buyers.dto';
@@ -21,6 +22,7 @@ const mockPrisma = {
     update: jest.fn(),
     count: jest.fn(),
   },
+  $queryRaw: jest.fn(),
 };
 
 describe('BuyersService', () => {
@@ -173,5 +175,35 @@ describe('BuyersService', () => {
         }),
       });
     });
+  });
+  describe('findAll() — trigram search', () => {
+    it('should use similarity query when search is provided', async () => {
+      mockPrisma.$queryRaw
+        .mockResolvedValueOnce([{ id: 'b-1' }])
+        .mockResolvedValueOnce([{ count: BigInt(1) }]);
+      mockPrisma.buyer.findMany.mockResolvedValue([{ id: 'b-1', name: 'Nike' }]);
+
+      const result = await service.findAll({
+        page: 1,
+        limit: 20,
+        search: 'Nkie',
+      });
+
+      expect(mockPrisma.$queryRaw).toHaveBeenCalled();
+      expect(result.data).toEqual([{ id: 'b-1', name: 'Nike' }]);
+      expect(result.meta.totalItems).toBe(1);
+    });
+  });
+});
+
+describe('BuyerQueryDto dropdown transform', () => {
+  it('should coerce query string "true" to boolean true', () => {
+    const dto = plainToInstance(BuyerQueryDto, { dropdown: 'true', page: '1', limit: '20' });
+    expect(dto.dropdown).toBe(true);
+  });
+
+  it('should coerce query string "false" to boolean false', () => {
+    const dto = plainToInstance(BuyerQueryDto, { dropdown: 'false' });
+    expect(dto.dropdown).toBe(false);
   });
 });

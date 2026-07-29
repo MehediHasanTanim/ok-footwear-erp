@@ -18,6 +18,9 @@ import {
   ArticleQueryDto,
 } from '../dto/articles.dto';
 
+/** Minimum pg_trgm similarity score for fuzzy article search. */
+const TRIGRAM_THRESHOLD = 0.15;
+
 @Injectable()
 export class ArticlesService {
   private readonly logger = new Logger(ArticlesService.name);
@@ -32,20 +35,14 @@ export class ArticlesService {
     const { page, limit, search, category, season } = query;
     const skip = (page - 1) * limit;
 
+    if (search) {
+      return this.findAllByTrigram(search, skip, limit, page, category, season);
+    }
+
     const where: Prisma.ArticleWhereInput = {
       deletedAt: null,
       isActive: true,
     };
-
-    if (search) {
-      // Trigram search across code + description.
-      // We use Prisma's OR + contains for case-insensitive matching.
-      // The pg_trgm GIN index on code and description makes this fast.
-      where.OR = [
-        { code: { contains: search, mode: 'insensitive' } },
-        { description: { contains: search, mode: 'insensitive' } },
-      ];
-    }
 
     if (category) {
       where.category = category;
@@ -64,6 +61,92 @@ export class ArticlesService {
       }),
       this.prisma.article.count({ where }),
     ]);
+
+    return {
+      data,
+      meta: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  /**
+   * Fuzzy search via pg_trgm similarity on code OR description (threshold 0.15).
+   * Uses GIN trigram indexes on ord.articles.code and ord.articles.description.
+   */
+  private async findAllByTrigram(
+    search: string,
+    skip: number,
+    limit: number,
+    page: number,
+    category?: string,
+    season?: string,
+  ) {
+    const categoryFilter =
+      category !== undefined && category !== null
+        ? Prisma.sql`AND category = ${category}`
+        : Prisma.empty;
+    const seasonFilter =
+      season !== undefined && season !== null
+        ? Prisma.sql`AND season = ${season}`
+        : Prisma.empty;
+
+    const [idRows, countRows] = await Promise.all([
+      this.prisma.$queryRaw<{ id: string }[]>`
+        SELECT id
+        FROM ord.articles
+        WHERE deleted_at IS NULL
+          AND is_active = true
+          AND (
+            similarity(code, ${search}) > ${TRIGRAM_THRESHOLD}
+            OR similarity(COALESCE(description, ''), ${search}) > ${TRIGRAM_THRESHOLD}
+          )
+          ${categoryFilter}
+          ${seasonFilter}
+        ORDER BY GREATEST(
+          similarity(code, ${search}),
+          similarity(COALESCE(description, ''), ${search})
+        ) DESC, created_at DESC
+        LIMIT ${limit} OFFSET ${skip}
+      `,
+      this.prisma.$queryRaw<{ count: bigint }[]>`
+        SELECT COUNT(*)::bigint AS count
+        FROM ord.articles
+        WHERE deleted_at IS NULL
+          AND is_active = true
+          AND (
+            similarity(code, ${search}) > ${TRIGRAM_THRESHOLD}
+            OR similarity(COALESCE(description, ''), ${search}) > ${TRIGRAM_THRESHOLD}
+          )
+          ${categoryFilter}
+          ${seasonFilter}
+      `,
+    ]);
+
+    const ids = idRows.map((r) => r.id);
+    const total = Number(countRows[0]?.count ?? 0);
+
+    if (ids.length === 0) {
+      return {
+        data: [],
+        meta: {
+          page,
+          limit,
+          totalItems: total,
+          totalPages: Math.ceil(total / limit) || 0,
+        },
+      };
+    }
+
+    const rows = await this.prisma.article.findMany({
+      where: { id: { in: ids } },
+    });
+
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const data = ids.map((id) => byId.get(id)).filter(Boolean);
 
     return {
       data,

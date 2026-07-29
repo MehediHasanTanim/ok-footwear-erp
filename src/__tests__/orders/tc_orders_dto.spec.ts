@@ -106,6 +106,59 @@ describe('CreateOrderDto validation', () => {
   });
 
   // =========================================================================
+  // deliveryDate must be future
+  // =========================================================================
+
+  it('should fail when deliveryDate is in the past', async () => {
+    const dto = plainToInstance(CreateOrderDto, {
+      buyerId: '550e8400-e29b-41d4-a716-446655440000',
+      articleId: '550e8400-e29b-41d4-a716-446655440001',
+      totalQuantity: 10,
+      deliveryDate: '2020-01-01',
+      currency: 'USD',
+      orderLines: [{ sizeLabel: '38', quantity: 10, unitPrice: 12.5 }],
+    });
+
+    const errors = await validate(dto);
+    const deliveryError = errors.find((e) => e.property === 'deliveryDate');
+    expect(deliveryError).toBeDefined();
+    expect(deliveryError?.constraints?.['isFutureDate']).toContain('future');
+  });
+
+  it('should fail when deliveryDate is today', async () => {
+    const today = new Date();
+    const todayIso = today.toISOString().split('T')[0];
+
+    const dto = plainToInstance(CreateOrderDto, {
+      buyerId: '550e8400-e29b-41d4-a716-446655440000',
+      articleId: '550e8400-e29b-41d4-a716-446655440001',
+      totalQuantity: 10,
+      deliveryDate: todayIso,
+      currency: 'USD',
+      orderLines: [{ sizeLabel: '38', quantity: 10, unitPrice: 12.5 }],
+    });
+
+    const errors = await validate(dto);
+    const deliveryError = errors.find((e) => e.property === 'deliveryDate');
+    expect(deliveryError).toBeDefined();
+  });
+
+  it('should pass when deliveryDate is in the future', async () => {
+    const dto = plainToInstance(CreateOrderDto, {
+      buyerId: '550e8400-e29b-41d4-a716-446655440000',
+      articleId: '550e8400-e29b-41d4-a716-446655440001',
+      totalQuantity: 10,
+      deliveryDate: '2099-12-31',
+      currency: 'USD',
+      orderLines: [{ sizeLabel: '38', quantity: 10, unitPrice: 12.5 }],
+    });
+
+    const errors = await validate(dto);
+    const deliveryError = errors.find((e) => e.property === 'deliveryDate');
+    expect(deliveryError).toBeUndefined();
+  });
+
+  // =========================================================================
   // StatusTransitionDto
   // =========================================================================
 

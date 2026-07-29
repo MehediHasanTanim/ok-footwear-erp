@@ -17,8 +17,9 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
-import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
+import { JwtAuthGuard, type JwtPayload } from '@common/guards/jwt-auth.guard';
 import { RbacGuard, Permissions } from '@common/guards/rbac.guard';
+import { CurrentUser } from '@common/decorators/auth.decorator';
 import { OrdersService } from '../services/orders.service';
 import {
   CreateOrderDto,
@@ -97,8 +98,12 @@ export class OrdersController {
   @ApiResponse({ status: 200, description: 'Status transitioned successfully' })
   @ApiResponse({ status: 400, description: 'Invalid transition (e.g., sample not approved, terminal state)' })
   @ApiResponse({ status: 404, description: 'Order not found' })
-  transitionStatus(@Param('id') id: string, @Body() dto: StatusTransitionDto) {
-    return this.ordersService.transitionStatus(id, dto);
+  transitionStatus(
+    @Param('id') id: string,
+    @Body() dto: StatusTransitionDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.ordersService.transitionStatus(id, dto, user.sub);
   }
 
   // =========================================================================

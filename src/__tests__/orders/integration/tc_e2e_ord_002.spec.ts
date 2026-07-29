@@ -28,7 +28,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Reflector } from '@nestjs/core';
-import * as request from 'supertest';
+import request from 'supertest';
 import * as argon2 from 'argon2';
 import { PrismaClient } from '@prisma/client';
 import { Redis } from 'ioredis';
@@ -345,8 +345,8 @@ async function seedE2EData(prisma: PrismaClient): Promise<void> {
 
   // Role
   await prisma.$executeRawUnsafe(`
-    INSERT INTO sys.roles (id, name, description, is_system)
-    VALUES ('${OPS_ROLE_ID}', 'E2E Ops', 'E2E test ops role', true)
+    INSERT INTO sys.roles (id, name, description, is_system, updated_at)
+    VALUES ('${OPS_ROLE_ID}', 'E2E Ops', 'E2E test ops role', true, NOW())
     ON CONFLICT (id) DO NOTHING
   `);
 
@@ -360,7 +360,7 @@ async function seedE2EData(prisma: PrismaClient): Promise<void> {
     await prisma.$executeRawUnsafe(`
       INSERT INTO sys.permissions (id, module, action, description)
       VALUES ('${id}', '${module}', '${action}', '${desc}')
-      ON CONFLICT (id) DO NOTHING
+      ON CONFLICT (module, action) DO NOTHING
     `);
   }
 
@@ -375,8 +375,8 @@ async function seedE2EData(prisma: PrismaClient): Promise<void> {
 
   // User
   await prisma.$executeRawUnsafe(`
-    INSERT INTO sys.users (id, email, password_hash, first_name, last_name, is_active)
-    VALUES ('${OPS_USER_ID}', 'e2e-ops@okfootwear.test', '${passwordHash}', 'E2E', 'Ops', true)
+    INSERT INTO sys.users (id, email, password_hash, first_name, last_name, is_active, updated_at)
+    VALUES ('${OPS_USER_ID}', 'e2e-ops@okfootwear.test', '${passwordHash}', 'E2E', 'Ops', true, NOW())
     ON CONFLICT (id) DO NOTHING
   `);
 
@@ -389,15 +389,15 @@ async function seedE2EData(prisma: PrismaClient): Promise<void> {
 
   // Buyer
   await prisma.$executeRawUnsafe(`
-    INSERT INTO ord.buyers (id, name, currency, payment_terms, is_active, deleted_at)
-    VALUES ('${BUYER_ID}', 'E2E Buyer Ltd.', 'USD', 'LC_SIGHT', true, NULL)
+    INSERT INTO ord.buyers (id, name, currency, payment_terms, is_active, deleted_at, updated_at)
+    VALUES ('${BUYER_ID}', 'E2E Buyer Ltd.', 'USD', 'LC_SIGHT', true, NULL, NOW())
     ON CONFLICT (id) DO NOTHING
   `);
 
   // Article
   await prisma.$executeRawUnsafe(`
-    INSERT INTO ord.articles (id, code, description, is_active, deleted_at)
-    VALUES ('${ARTICLE_ID}', 'E2E-ART-001', 'E2E Test Article', true, NULL)
+    INSERT INTO ord.articles (id, code, description, is_active, deleted_at, updated_at)
+    VALUES ('${ARTICLE_ID}', 'E2E-ART-001', 'E2E Test Article', true, NULL, NOW())
     ON CONFLICT (id) DO NOTHING
   `);
 }

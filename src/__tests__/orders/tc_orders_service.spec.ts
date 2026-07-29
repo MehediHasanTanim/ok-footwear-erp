@@ -12,19 +12,14 @@
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { OrdersService } from '@modules/orders/services/orders.service';
+import { DocNumberService } from '@modules/orders/services/doc-number.service';
 import { PrismaService } from '@shared/database/prisma.service';
 import { OrderConfirmedEvent } from '@modules/orders/events/order-confirmed.event';
 import { CreateOrderDto, UpdateOrderDto, StatusTransitionDto } from '@modules/orders/dto/orders.dto';
 
-// Mock CorrelationStore
-jest.mock('@shared/logger/correlation-store', () => ({
-  CorrelationStore: {
-    getStore: jest.fn().mockReturnValue({ correlationId: 'test-corr-id', userId: 'user-456' }),
-    enterWith: jest.fn(),
-  },
-}));
+const CONFIRMED_BY_USER = 'user-456';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -57,6 +52,10 @@ const mockPrisma = {
 
 const mockEventEmitter = {
   emit: jest.fn(),
+};
+
+const mockDocNumber = {
+  generate: jest.fn().mockResolvedValue('ORD-000001'),
 };
 
 // ---------------------------------------------------------------------------
@@ -119,6 +118,7 @@ describe('OrdersService', () => {
         OrdersService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: EventEmitter2, useValue: mockEventEmitter },
+        { provide: DocNumberService, useValue: mockDocNumber },
       ],
     }).compile();
 
@@ -126,6 +126,7 @@ describe('OrdersService', () => {
 
     // Reset mocks
     jest.clearAllMocks();
+    mockDocNumber.generate.mockResolvedValue('ORD-000001');
 
     // Default mock setup
     mockPrisma.buyer.findUnique.mockResolvedValue({
@@ -138,9 +139,6 @@ describe('OrdersService', () => {
       isActive: true,
       deletedAt: null,
     });
-    mockPrisma.$queryRawUnsafe.mockResolvedValue([
-      { next_doc_number: 'ORD-000001' },
-    ]);
 
     // $transaction mock: execute the callback with mockTx
     mockPrisma.$transaction.mockImplementation(
@@ -158,13 +156,28 @@ describe('OrdersService', () => {
       isActive: true,
       deletedAt: null,
     });
-    mockTx.$queryRawUnsafe.mockResolvedValue([
-      { next_doc_number: 'ORD-000001' },
-    ]);
     mockTx.order.create.mockResolvedValue({
       id: 'order-123',
       orderNumber: 'ORD-000001',
       status: 'draft',
+      buyerId: 'buyer-1',
+      articleId: 'article-1',
+      sampleApproved: false,
+      totalQuantity: 1000,
+      deliveryDate: new Date('2026-12-31'),
+      currency: 'USD',
+      confirmedAt: null,
+      confirmedBy: null,
+      cancelledAt: null,
+      cancellationReason: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      buyer: { name: 'Test Buyer', currency: 'USD' },
+      article: { code: 'ART-001', description: 'Test Article' },
+      orderLines: [
+        { id: 'line-1', sizeLabel: '38', quantity: 500, unitPrice: 12.5 },
+        { id: 'line-2', sizeLabel: '39', quantity: 500, unitPrice: 12.5 },
+      ],
     });
     mockTx.orderMilestone.createMany.mockResolvedValue({ count: 6 });
   });
@@ -195,12 +208,11 @@ describe('OrdersService', () => {
     it('should create successfully when sum matches', async () => {
       const result = await service.create(validCreateDto());
 
-      expect(result).toEqual({
-        id: 'order-123',
-        orderNumber: 'ORD-000001',
-        status: 'draft',
-      });
+      expect(result.orderNumber).toBe('ORD-000001');
+      expect(result.status).toBe('draft');
+      expect(result.nextAllowedStates).toEqual(['confirmed', 'cancelled']);
       expect(mockPrisma.$transaction).toHaveBeenCalled();
+      expect(mockDocNumber.generate).toHaveBeenCalledWith(mockTx, 'ORD');
     });
 
     it('should create order with draft status unconditionally', async () => {
@@ -296,9 +308,11 @@ describe('OrdersService', () => {
       mockTx.order.update.mockResolvedValue({ ...order, status: 'confirmed' });
       mockPrisma.order.update.mockResolvedValue({ ...order, status: 'confirmed' });
 
-      await service.transitionStatus('order-123', {
-        toStatus: 'confirmed',
-      } as StatusTransitionDto);
+      await service.transitionStatus(
+        'order-123',
+        { toStatus: 'confirmed' } as StatusTransitionDto,
+        CONFIRMED_BY_USER,
+      );
 
       expect(mockTx.orderMilestone.createMany).toHaveBeenCalledWith({
         data: expect.arrayContaining([
@@ -325,9 +339,11 @@ describe('OrdersService', () => {
       mockTx.order.update.mockResolvedValue({ ...order, status: 'confirmed' });
       mockPrisma.order.update.mockResolvedValue({ ...order, status: 'confirmed' });
 
-      await service.transitionStatus('order-123', {
-        toStatus: 'confirmed',
-      } as StatusTransitionDto);
+      await service.transitionStatus(
+        'order-123',
+        { toStatus: 'confirmed' } as StatusTransitionDto,
+        CONFIRMED_BY_USER,
+      );
 
       const callArgs = mockTx.orderMilestone.createMany.mock.calls[0][0] as {
         data: Array<{ milestoneType: string; plannedDate: Date }>;
@@ -369,19 +385,17 @@ describe('OrdersService', () => {
   // =========================================================================
 
   describe('transitionStatus() — event emission', () => {
-    beforeEach(() => {
-      // CorrelationStore is mocked globally — no need to enterWith
-    });
-
     it('should emit OrderConfirmedEvent after confirming an order', async () => {
       const order = mockOrder({ status: 'draft', deliveryDate: new Date('2026-12-31') });
       mockPrisma.order.findUnique.mockResolvedValue(order);
       mockTx.order.update.mockResolvedValue({ ...order, status: 'confirmed' });
       mockPrisma.order.update.mockResolvedValue({ ...order, status: 'confirmed' });
 
-      await service.transitionStatus('order-123', {
-        toStatus: 'confirmed',
-      } as StatusTransitionDto);
+      await service.transitionStatus(
+        'order-123',
+        { toStatus: 'confirmed' } as StatusTransitionDto,
+        CONFIRMED_BY_USER,
+      );
 
       expect(mockEventEmitter.emit).toHaveBeenCalledWith(
         'order.confirmed',
@@ -391,7 +405,18 @@ describe('OrdersService', () => {
       const emittedEvent = mockEventEmitter.emit.mock.calls[0][1] as OrderConfirmedEvent;
       expect(emittedEvent.orderId).toBe('order-123');
       expect(emittedEvent.buyerId).toBe('buyer-1');
-      expect(emittedEvent.confirmedBy).toBe('user-456');
+      expect(emittedEvent.confirmedBy).toBe(CONFIRMED_BY_USER);
+    });
+
+    it('should reject confirm without authenticated userId', async () => {
+      const order = mockOrder({ status: 'draft', deliveryDate: new Date('2026-12-31') });
+      mockPrisma.order.findUnique.mockResolvedValue(order);
+
+      await expect(
+        service.transitionStatus('order-123', {
+          toStatus: 'confirmed',
+        } as StatusTransitionDto),
+      ).rejects.toThrow(UnauthorizedException);
     });
 
     it('should NOT emit event if milestone generation fails (rollback scenario)', async () => {
@@ -404,9 +429,11 @@ describe('OrdersService', () => {
       });
 
       try {
-        await service.transitionStatus('order-123', {
-          toStatus: 'confirmed',
-        } as StatusTransitionDto);
+        await service.transitionStatus(
+          'order-123',
+          { toStatus: 'confirmed' } as StatusTransitionDto,
+          CONFIRMED_BY_USER,
+        );
         fail('Should have thrown');
       } catch (_e) {
         // Transaction failed — event should NOT have been emitted
@@ -453,9 +480,11 @@ describe('OrdersService', () => {
       mockPrisma.order.findUnique.mockResolvedValue(order);
       mockPrisma.order.update.mockResolvedValue({ ...order, status: 'confirmed' });
 
-      await service.transitionStatus('order-123', {
-        toStatus: 'confirmed',
-      } as StatusTransitionDto);
+      await service.transitionStatus(
+        'order-123',
+        { toStatus: 'confirmed' } as StatusTransitionDto,
+        CONFIRMED_BY_USER,
+      );
 
       // Event MUST be emitted after transaction completes
       expect(callOrder).toEqual(['transaction', 'transaction-done', 'event-emitted']);

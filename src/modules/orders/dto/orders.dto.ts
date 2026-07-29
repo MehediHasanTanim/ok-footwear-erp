@@ -22,6 +22,7 @@ import { Type, Exclude, Expose, Transform } from 'class-transformer';
 import { PaginationDto } from '@common/dto/pagination.dto';
 import { IsIso4217Currency } from '../validators/iso4217.validator';
 import { ValidateOrderLinesSum } from '../validators/order-lines-sum.validator';
+import { IsFutureDate } from '../validators/future-date.validator';
 import type { OrderStatus } from '../services/order-state-machine';
 import { nextAllowedStates } from '../services/order-state-machine';
 
@@ -94,8 +95,7 @@ export class CreateOrderDto {
 
   @ApiProperty({ example: '2026-12-31', description: 'Delivery date (must be future)' })
   @IsDateString()
-  // Future-date validation is done in the service layer to allow flexibility
-  // in test scenarios. Add @MinDate() if needed.
+  @IsFutureDate()
   deliveryDate!: string;
 
   @ApiProperty({ example: 'USD', description: 'ISO 4217 currency code' })
@@ -133,6 +133,7 @@ export class UpdateOrderDto {
   @ApiPropertyOptional({ example: '2027-01-15' })
   @IsOptional()
   @IsDateString()
+  @IsFutureDate()
   deliveryDate?: string;
 
   @ApiPropertyOptional({ example: 'EUR' })

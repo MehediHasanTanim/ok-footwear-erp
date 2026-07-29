@@ -27,7 +27,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Reflector } from '@nestjs/core';
-import * as request from 'supertest';
+import request from 'supertest';
 import * as argon2 from 'argon2';
 import { PrismaClient } from '@prisma/client';
 import { Redis } from 'ioredis';
@@ -272,6 +272,8 @@ describe('Orders Module — Integration Tests', () => {
     // -------------------------------------------------------------------
     jwtService = app.get(JwtService);
 
+    const jwtSecret = process.env['JWT_SECRET']!;
+
     opsUserToken = await jwtService.signAsync(
       {
         sub: OPS_USER_ID,
@@ -283,7 +285,7 @@ describe('Orders Module — Integration Tests', () => {
           'orders:delete',
         ],
       },
-      { expiresIn: '1h' },
+      { expiresIn: '1h', secret: jwtSecret },
     );
 
     essUserToken = await jwtService.signAsync(
@@ -292,7 +294,7 @@ describe('Orders Module — Integration Tests', () => {
         email: 'ess@okfootwear.test',
         permissions: ['hr:read'], // ESS-only — no Orders permissions
       },
-      { expiresIn: '1h' },
+      { expiresIn: '1h', secret: jwtSecret },
     );
   }, 60_000);
 
@@ -546,12 +548,18 @@ describe('Orders Module — Integration Tests', () => {
       const body = res.body as Rfc7807Body;
       expectRfc7807Body(body, 422);
 
-      // Detail must reference orderLines or totalQuantity
+      // Detail or field errors must reference orderLines / totalQuantity
       const detail = (body.detail ?? '').toLowerCase();
+      const errorText = (body.errors ?? [])
+        .map((e) => `${e.field} ${e.message}`)
+        .join(' ')
+        .toLowerCase();
+      const combined = `${detail} ${errorText}`;
       expect(
-        detail.includes('orderlines') ||
-          detail.includes('totalquantity') ||
-          detail.includes('quantity'),
+        combined.includes('orderlines') ||
+          combined.includes('totalquantity') ||
+          combined.includes('quantity') ||
+          combined.includes('must equal'),
       ).toBe(true);
     });
 
@@ -641,7 +649,23 @@ describe('Orders Module — Integration Tests', () => {
         expect((item.buyer as Record<string, unknown>).name).toBeDefined();
         expect(item.totalQuantity).toBeDefined();
         expect(item.deliveryDate).toBeDefined();
+        expect(item.nextAllowedStates).toEqual(['confirmed', 'cancelled']);
       }
+    });
+
+    it('should include nextAllowedStates on GET /orders/:id', async () => {
+      const orders = await prisma.order.findMany({
+        where: { buyerId: BUYER_ID },
+        take: 1,
+      });
+
+      const res = await request(app.getHttpServer())
+        .get(`/api/v1/orders/${orders[0]!.id}`)
+        .set('Authorization', `Bearer ${opsUserToken}`)
+        .expect(200);
+
+      const order = res.body.data;
+      expect(order.nextAllowedStates).toEqual(['confirmed', 'cancelled']);
     });
 
     it('should filter by status=confirmed when provided', async () => {
@@ -701,7 +725,8 @@ describe('Orders Module — Integration Tests', () => {
       const order = res.body.data;
       expect(order.status).toBe('confirmed');
       expect(order.confirmedAt).toBeDefined();
-      expect(order.confirmedBy).toBeDefined();
+      expect(order.confirmedBy).toBe(OPS_USER_ID);
+      expect(order.nextAllowedStates).toEqual(['in_production', 'cancelled']);
 
       // Verify 6 milestones in the database
       const milestoneCount = await prisma.orderMilestone.count({
@@ -757,7 +782,7 @@ describe('Orders Module — Integration Tests', () => {
           currency: 'USD',
           sampleApproved: false,
           confirmedAt: new Date(),
-          confirmedBy: 'test-setup',
+          confirmedBy: OPS_USER_ID,
         },
       });
       confirmedOrderId = order.id;
@@ -815,10 +840,10 @@ async function seedReferenceData(prisma: PrismaClient): Promise<void> {
   // 1. Create test roles
   // -------------------------------------------------------------------
   await prisma.$executeRawUnsafe(`
-    INSERT INTO sys.roles (id, name, description, is_system)
+    INSERT INTO sys.roles (id, name, description, is_system, updated_at)
     VALUES
-      ('${OPS_ROLE_ID}', 'Ops Staff', 'Operational staff role for integration tests', true),
-      ('${ESS_ROLE_ID}', 'Employee ESS', 'ESS-only role for integration tests', true)
+      ('${OPS_ROLE_ID}', 'Ops Staff', 'Operational staff role for integration tests', true, NOW()),
+      ('${ESS_ROLE_ID}', 'Employee ESS', 'ESS-only role for integration tests', true, NOW())
     ON CONFLICT (id) DO NOTHING
   `);
 
@@ -844,7 +869,7 @@ async function seedReferenceData(prisma: PrismaClient): Promise<void> {
     await prisma.$executeRawUnsafe(`
       INSERT INTO sys.permissions (id, module, action, description)
       VALUES ('${id}', '${module}', '${action}', '${description}')
-      ON CONFLICT (id) DO NOTHING
+      ON CONFLICT (module, action) DO NOTHING
     `);
   }
 
@@ -879,15 +904,15 @@ async function seedReferenceData(prisma: PrismaClient): Promise<void> {
 
   // ops_user
   await prisma.$executeRawUnsafe(`
-    INSERT INTO sys.users (id, email, password_hash, first_name, last_name, is_active)
-    VALUES ('${OPS_USER_ID}', 'ops@okfootwear.test', '${passwordHash}', 'Ops', 'User', true)
+    INSERT INTO sys.users (id, email, password_hash, first_name, last_name, is_active, updated_at)
+    VALUES ('${OPS_USER_ID}', 'ops@okfootwear.test', '${passwordHash}', 'Ops', 'User', true, NOW())
     ON CONFLICT (id) DO NOTHING
   `);
 
   // employee_ess
   await prisma.$executeRawUnsafe(`
-    INSERT INTO sys.users (id, email, password_hash, first_name, last_name, is_active)
-    VALUES ('${ESS_USER_ID}', 'ess@okfootwear.test', '${passwordHash}', 'ESS', 'User', true)
+    INSERT INTO sys.users (id, email, password_hash, first_name, last_name, is_active, updated_at)
+    VALUES ('${ESS_USER_ID}', 'ess@okfootwear.test', '${passwordHash}', 'ESS', 'User', true, NOW())
     ON CONFLICT (id) DO NOTHING
   `);
 
@@ -910,14 +935,14 @@ async function seedReferenceData(prisma: PrismaClient): Promise<void> {
   // 6. Seed buyer and article reference data
   // -------------------------------------------------------------------
   await prisma.$executeRawUnsafe(`
-    INSERT INTO ord.buyers (id, name, currency, payment_terms, is_active, deleted_at)
-    VALUES ('${BUYER_ID}', 'Test Buyer Ltd.', 'USD', 'LC_SIGHT', true, NULL)
+    INSERT INTO ord.buyers (id, name, currency, payment_terms, is_active, deleted_at, updated_at)
+    VALUES ('${BUYER_ID}', 'Test Buyer Ltd.', 'USD', 'LC_SIGHT', true, NULL, NOW())
     ON CONFLICT (id) DO NOTHING
   `);
 
   await prisma.$executeRawUnsafe(`
-    INSERT INTO ord.articles (id, code, description, is_active, deleted_at)
-    VALUES ('${ARTICLE_ID}', 'ART-TEST-001', 'Test Article - Leather Boot', true, NULL)
+    INSERT INTO ord.articles (id, code, description, is_active, deleted_at, updated_at)
+    VALUES ('${ARTICLE_ID}', 'ART-TEST-001', 'Test Article - Leather Boot', true, NULL, NOW())
     ON CONFLICT (id) DO NOTHING
   `);
 }

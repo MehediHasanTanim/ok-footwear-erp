@@ -13,6 +13,7 @@ import {
   IsNumber,
   Min,
 } from 'class-validator';
+import { Transform, Exclude, Expose } from 'class-transformer';
 import { PaginationDto } from '@common/dto/pagination.dto';
 import { IsIso4217Currency } from '../validators/iso4217.validator';
 
@@ -34,6 +35,7 @@ export class BuyerQueryDto extends PaginationDto {
     default: false,
   })
   @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
   @IsBoolean()
   dropdown?: boolean = false;
 }
@@ -114,8 +116,6 @@ export class UpdateBuyerDto {
 // ---------------------------------------------------------------------------
 // BuyerResponseDto — serialized response shape
 // ---------------------------------------------------------------------------
-
-import { Exclude, Expose, Transform } from 'class-transformer';
 
 @Exclude()
 export class BuyerResponseDto {

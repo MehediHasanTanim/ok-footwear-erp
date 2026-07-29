@@ -8,25 +8,26 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  UnauthorizedException,
   Logger,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { plainToInstance } from 'class-transformer';
 import { PrismaService } from '@shared/database/prisma.service';
-import { CorrelationStore } from '@shared/logger/correlation-store';
 import { Prisma } from '@prisma/client';
 import {
   CreateOrderDto,
   UpdateOrderDto,
   OrderQueryDto,
   StatusTransitionDto,
+  OrderResponseDto,
 } from '../dto/orders.dto';
 import {
   OrderStatus,
   validateTransition,
-  STATUS_TRANSITIONS,
-  nextAllowedStates,
 } from './order-state-machine';
 import { OrderConfirmedEvent } from '../events/order-confirmed.event';
+import { DocNumberService } from './doc-number.service';
 
 // =========================================================================
 // Milestone Lead-Time Constants
@@ -60,6 +61,19 @@ export const PP_SAMPLE_LEAD_DAYS = 75;
 /** Days before delivery: material booking (leather, sole, accessories) */
 export const MATERIAL_BOOKING_LEAD_DAYS = 90;
 
+const ORDER_DETAIL_INCLUDE = {
+  buyer: { select: { name: true, currency: true } },
+  article: { select: { code: true, description: true } },
+  orderLines: true,
+} as const;
+
+const ORDER_FULL_INCLUDE = {
+  ...ORDER_DETAIL_INCLUDE,
+  milestones: {
+    orderBy: { plannedDate: 'asc' as const },
+  },
+};
+
 // =========================================================================
 // Service
 // =========================================================================
@@ -71,7 +85,30 @@ export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly docNumber: DocNumberService,
   ) {}
+
+  // =========================================================================
+  // Serialization
+  // =========================================================================
+
+  private toResponse(order: unknown): OrderResponseDto {
+    const raw = order as Record<string, unknown>;
+    const lines = Array.isArray(raw['orderLines']) ? raw['orderLines'] : [];
+
+    const normalized = {
+      ...raw,
+      orderLines: lines.map((line: Record<string, unknown>) => ({
+        ...line,
+        unitPrice:
+          line['unitPrice'] != null ? Number(String(line['unitPrice'])) : null,
+      })),
+    };
+
+    return plainToInstance(OrderResponseDto, normalized, {
+      excludeExtraneousValues: true,
+    });
+  }
 
   // =========================================================================
   // Query
@@ -101,23 +138,19 @@ export class OrdersService {
       }
     }
 
-    const [data, total] = await Promise.all([
+    const [rows, total] = await Promise.all([
       this.prisma.order.findMany({
         skip,
         take: limit,
         where,
-        include: {
-          buyer: { select: { name: true, currency: true } },
-          article: { select: { code: true, description: true } },
-          orderLines: true,
-        },
+        include: ORDER_DETAIL_INCLUDE,
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.order.count({ where }),
     ]);
 
     return {
-      data,
+      data: rows.map((row) => this.toResponse(row)),
       meta: {
         page,
         limit,
@@ -130,14 +163,7 @@ export class OrdersService {
   async findOne(id: string) {
     const order = await this.prisma.order.findUnique({
       where: { id },
-      include: {
-        buyer: { select: { name: true, currency: true } },
-        article: { select: { code: true, description: true } },
-        orderLines: true,
-        milestones: {
-          orderBy: { plannedDate: 'asc' },
-        },
-      },
+      include: ORDER_FULL_INCLUDE,
     });
 
     if (!order) {
@@ -147,7 +173,7 @@ export class OrdersService {
       });
     }
 
-    return order;
+    return this.toResponse(order);
   }
 
   // =========================================================================
@@ -163,11 +189,7 @@ export class OrdersService {
    *
    * The order is always created in 'draft' status.
    */
-  async create(dto: CreateOrderDto): Promise<{
-    id: string;
-    orderNumber: string;
-    status: string;
-  }> {
+  async create(dto: CreateOrderDto): Promise<OrderResponseDto> {
     // Validate sum (done by class-validator, but double-check in service
     // as a defense-in-depth measure)
     const lineSum = dto.orderLines.reduce((s, l) => s + l.quantity, 0);
@@ -184,7 +206,7 @@ export class OrdersService {
       });
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const order = await this.prisma.$transaction(async (tx) => {
       // Validate buyer
       const buyer = await tx.buyer.findUnique({
         where: { id: dto.buyerId },
@@ -215,24 +237,9 @@ export class OrdersService {
         });
       }
 
-      // Generate concurrency-safe order number via Postgres function.
-      // This uses SELECT ... FOR UPDATE row-level locking on sys.document_sequences.
-      // The number is assigned inside this transaction — if the transaction
-      // rolls back, the number is NOT consumed.
-      const orderNumberResult = await tx.$queryRawUnsafe<{ next_doc_number: string }[]>(
-        `SELECT sys.next_doc_number($1, $2, $3) AS next_doc_number`,
-        'ORD',
-        6,
-        '-',
-      );
-      const orderNumber = orderNumberResult[0]?.next_doc_number;
+      const orderNumber = await this.docNumber.generate(tx, 'ORD');
 
-      if (!orderNumber) {
-        throw new Error('Failed to generate order number');
-      }
-
-      // Create order
-      const order = await tx.order.create({
+      return tx.order.create({
         data: {
           orderNumber,
           buyerId: dto.buyerId,
@@ -249,19 +256,13 @@ export class OrdersService {
             })),
           },
         },
-        select: {
-          id: true,
-          orderNumber: true,
-          status: true,
-        },
+        include: ORDER_DETAIL_INCLUDE,
       });
-
-      this.logger.log(
-        `Order created: ${orderNumber} (id: ${order.id})`,
-      );
-
-      return order;
     });
+
+    this.logger.log(`Order created: ${order.orderNumber} (id: ${order.id})`);
+
+    return this.toResponse(order);
   }
 
   // =========================================================================
@@ -307,7 +308,7 @@ export class OrdersService {
       }
     }
 
-    return this.prisma.order.update({
+    const updated = await this.prisma.order.update({
       where: { id },
       data: {
         ...(dto.articleId !== undefined && { articleId: dto.articleId }),
@@ -316,12 +317,10 @@ export class OrdersService {
         ...(dto.currency !== undefined && { currency: dto.currency.toUpperCase() }),
         ...(dto.sampleApproved !== undefined && { sampleApproved: dto.sampleApproved }),
       },
-      include: {
-        buyer: { select: { name: true, currency: true } },
-        article: { select: { code: true, description: true } },
-        orderLines: true,
-      },
+      include: ORDER_DETAIL_INCLUDE,
     });
+
+    return this.toResponse(updated);
   }
 
   // =========================================================================
@@ -336,8 +335,10 @@ export class OrdersService {
    *   - draft → confirmed: sets confirmed_at/confirmed_by, generates milestones,
    *     and emits OrderConfirmedEvent AFTER the transaction commits.
    *   - → cancelled: requires cancellation_reason, sets cancelled_at.
+   *
+   * @param userId Authenticated user UUID (JWT `sub`) required when confirming.
    */
-  async transitionStatus(id: string, dto: StatusTransitionDto) {
+  async transitionStatus(id: string, dto: StatusTransitionDto, userId?: string) {
     const toStatus = dto.toStatus as OrderStatus;
 
     // Fetch current order state
@@ -368,25 +369,29 @@ export class OrdersService {
         });
       }
 
-      return this.prisma.order.update({
+      const cancelled = await this.prisma.order.update({
         where: { id },
         data: {
           status: toStatus,
           cancelledAt: new Date(),
           cancellationReason: dto.cancellationReason,
         },
-        include: {
-          buyer: { select: { name: true, currency: true } },
-          article: { select: { code: true, description: true } },
-          orderLines: true,
-          milestones: true,
-        },
+        include: ORDER_FULL_INCLUDE,
       });
+
+      return this.toResponse(cancelled);
     }
 
     // ── Confirmation path ─────────────────────────────────────────────
     if (fromStatus === 'draft' && toStatus === 'confirmed') {
-      const confirmedBy = CorrelationStore.getStore()?.userId ?? 'system';
+      if (!userId) {
+        throw new UnauthorizedException({
+          statusCode: 401,
+          message: 'Authenticated user required to confirm an order',
+        });
+      }
+
+      const confirmedBy = userId;
 
       // Run confirm + milestone generation in a single transaction.
       // If milestone generation fails, the entire transaction rolls back
@@ -400,19 +405,11 @@ export class OrdersService {
             confirmedAt: new Date(),
             confirmedBy,
           },
-          include: {
-            buyer: { select: { name: true, currency: true } },
-            article: { select: { code: true, description: true } },
-            orderLines: true,
-          },
+          include: ORDER_DETAIL_INCLUDE,
         });
 
         // Generate milestones
-        await this.generateMilestonesInTx(
-          tx,
-          id,
-          updated.deliveryDate,
-        );
+        await this.generateMilestonesInTx(tx, id, updated.deliveryDate);
 
         return updated;
       });
@@ -433,20 +430,17 @@ export class OrdersService {
         `Order confirmed: ${order.orderNumber} → milestones generated, OrderConfirmedEvent emitted`,
       );
 
-      return result;
+      return this.toResponse(result);
     }
 
     // ── All other transitions ─────────────────────────────────────────
-    return this.prisma.order.update({
+    const updated = await this.prisma.order.update({
       where: { id },
       data: { status: toStatus },
-      include: {
-        buyer: { select: { name: true, currency: true } },
-        article: { select: { code: true, description: true } },
-        orderLines: true,
-        milestones: true,
-      },
+      include: ORDER_FULL_INCLUDE,
     });
+
+    return this.toResponse(updated);
   }
 
   // =========================================================================
