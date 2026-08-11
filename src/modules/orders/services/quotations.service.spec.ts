@@ -237,4 +237,83 @@ describe('QuotationsService', () => {
       expect(mockPrisma.quotation.update).toHaveBeenCalledTimes(0);
     });
   });
+
+  // =========================================================================
+  // Conversion rate KPI
+  // =========================================================================
+
+  describe('getConversionRate()', () => {
+    it('returns total, won, and rate', async () => {
+      mockPrisma.quotation.groupBy.mockResolvedValue([
+        { status: 'won', _count: { status: 2 } },
+        { status: 'lost', _count: { status: 2 } },
+      ]);
+      mockPrisma.quotation.count.mockResolvedValue(2);
+
+      const result = await service.getConversionRate();
+
+      expect(result).toEqual({ total: 4, won: 2, rate: 50 });
+    });
+
+    it('applies buyerId and dateRange filters', async () => {
+      mockPrisma.quotation.groupBy.mockResolvedValue([]);
+      mockPrisma.quotation.count.mockResolvedValue(0);
+
+      const from = new Date('2026-01-01');
+      const to = new Date('2026-06-30');
+      await service.getConversionRate({
+        buyerId: '550e8400-e29b-41d4-a716-446655440000',
+        dateRange: { from, to },
+      });
+
+      expect(mockPrisma.quotation.groupBy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            order: { buyerId: '550e8400-e29b-41d4-a716-446655440000' },
+            closedAt: { gte: from, lte: to },
+            status: { in: ['won', 'lost'] },
+          }),
+        }),
+      );
+    });
+  });
+
+  // =========================================================================
+  // bomVersionId persistence + BOM populate stub
+  // =========================================================================
+
+  describe('create() with bomVersionId', () => {
+    it('persists bomVersionId on create', async () => {
+      const bomVersionId = '550e8400-e29b-41d4-a716-446655440099';
+      mockPrisma.order.findUnique.mockResolvedValue({ id: 'order-1', status: 'confirmed' });
+      mockDocNumber.generate.mockResolvedValue('QUO-2026-000010');
+      mockPrisma.quotation.create.mockResolvedValue({
+        id: 'q-1',
+        quotationNumber: 'QUO-2026-000010',
+        bomVersionId,
+      });
+
+      await service.create('order-1', {
+        currency: 'USD',
+        bomVersionId,
+      });
+
+      expect(mockPrisma.quotation.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ bomVersionId }),
+      });
+    });
+  });
+
+  describe('autoPopulateCostFromBom()', () => {
+    it('throws NotImplementedException (501) until Manufacturing/BOM', async () => {
+      await expect(
+        service.autoPopulateCostFromBom('q-1', '550e8400-e29b-41d4-a716-446655440099'),
+      ).rejects.toMatchObject({
+        status: 501,
+        response: expect.objectContaining({
+          message: expect.stringContaining('not yet implemented'),
+        }),
+      });
+    });
+  });
 });

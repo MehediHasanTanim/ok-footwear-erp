@@ -4,14 +4,23 @@
 // OK Footwear ERP — Sprint 4, Orders Module
 // =============================================================================
 
-import { Controller, Get, Post, Patch, Body, Param, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Body,
+  Param,
+  UseGuards,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
+import { JwtAuthGuard, type JwtPayload } from '@common/guards/jwt-auth.guard';
 import { RbacGuard, Permissions } from '@common/guards/rbac.guard';
+import { CurrentUser } from '@common/decorators/auth.decorator';
 import { ValidateOrderPipe } from '../pipes/validate-order.pipe';
 import { SamplesService } from '../services/samples.service';
 import { CreateSampleDto, UpdateSampleDto, RejectSampleDto } from '../dto/samples.dto';
-import { CorrelationStore } from '@shared/logger/correlation-store';
 
 @ApiTags('Samples')
 @ApiBearerAuth()
@@ -57,9 +66,18 @@ export class SamplesController {
   @Post(':sampleId/approve')
   @Permissions('orders:update')
   @ApiOperation({ summary: 'Approve sample (sets order.sample_approved = true atomically)' })
-  approveSample(@Param('sampleId') sampleId: string) {
-    const userId = CorrelationStore.getStore()?.userId ?? 'system';
-    return this.samplesService.approveSample(sampleId, userId);
+  approveSample(
+    @Param('sampleId') sampleId: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    if (!user?.sub) {
+      throw new UnauthorizedException({
+        statusCode: 401,
+        message: 'Authentication required',
+        detail: 'A valid user identity is required to approve a sample.',
+      });
+    }
+    return this.samplesService.approveSample(sampleId, user.sub);
   }
 
   @Post(':sampleId/reject')

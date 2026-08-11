@@ -37,8 +37,13 @@ export class DocNumberService {
     tx: Prisma.TransactionClient | PrismaService,
     prefix: string,
   ): Promise<string> {
+    // Use the 1-arg overload: sys.next_doc_number(p_prefix text).
+    // Explicit ::text cast avoids ambiguous overload resolution when a
+    // 3-arg variant (prefix, pad_length, separator) also exists in the DB.
+    // Never pass JS numbers as pad/separator — node-pg sends them as bigint,
+    // which does not match PostgreSQL integer and yields 42883.
     const result = await tx.$queryRawUnsafe<{ next_doc_number: string }[]>(
-      `SELECT sys.next_doc_number($1) AS next_doc_number`,
+      `SELECT sys.next_doc_number($1::text) AS next_doc_number`,
       prefix,
     );
 

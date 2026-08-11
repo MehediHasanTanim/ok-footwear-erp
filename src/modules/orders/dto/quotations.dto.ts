@@ -5,7 +5,16 @@
 // =============================================================================
 
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsOptional, IsUUID, IsNumber, Min, Max, IsEnum, IsIn } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsUUID,
+  IsNumber,
+  Min,
+  Max,
+  IsIn,
+  IsDateString,
+} from 'class-validator';
 
 export class CreateQuotationDto {
   @ApiProperty({ example: 'USD', description: 'ISO 4217 currency code' })
@@ -24,6 +33,13 @@ export class CreateQuotationDto {
   @Min(0)
   @Max(100)
   winProbability?: number;
+
+  @ApiPropertyOptional({
+    description: 'Optional BOM version UUID (cost fill deferred until Manufacturing)',
+  })
+  @IsOptional()
+  @IsUUID()
+  bomVersionId?: string;
 }
 
 export class UpdateQuotationDto {
@@ -44,6 +60,13 @@ export class UpdateQuotationDto {
   @IsOptional()
   @IsString()
   currency?: string;
+
+  @ApiPropertyOptional({
+    description: 'Optional BOM version UUID (cost fill deferred until Manufacturing)',
+  })
+  @IsOptional()
+  @IsUUID()
+  bomVersionId?: string;
 }
 
 export class CloseQuotationDto {
@@ -55,4 +78,27 @@ export class CloseQuotationDto {
   @IsOptional()
   @IsString()
   outcomeReason?: string;
+}
+
+export class ConversionRateQueryDto {
+  @ApiPropertyOptional({ description: 'Filter by buyer UUID' })
+  @IsOptional()
+  @IsUUID()
+  buyerId?: string;
+
+  @ApiPropertyOptional({ description: 'Closed-at range start (ISO 8601)' })
+  @IsOptional()
+  @IsDateString()
+  from?: string;
+
+  @ApiPropertyOptional({ description: 'Closed-at range end (ISO 8601)' })
+  @IsOptional()
+  @IsDateString()
+  to?: string;
+}
+
+export class PopulateFromBomDto {
+  @ApiProperty({ description: 'BOM version UUID to populate cost from' })
+  @IsUUID()
+  bomVersionId!: string;
 }

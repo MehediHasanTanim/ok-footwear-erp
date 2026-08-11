@@ -59,6 +59,7 @@ export class QuotationsService {
           currency: dto.currency.toUpperCase(),
           ...(dto.quotedPrice !== undefined && { quotedPrice: dto.quotedPrice }),
           ...(dto.winProbability !== undefined && { winProbability: dto.winProbability }),
+          ...(dto.bomVersionId !== undefined && { bomVersionId: dto.bomVersionId }),
         },
       });
 
@@ -128,6 +129,7 @@ export class QuotationsService {
         ...(dto.quotedPrice !== undefined && { quotedPrice: dto.quotedPrice }),
         ...(dto.winProbability !== undefined && { winProbability: dto.winProbability }),
         ...(dto.currency !== undefined && { currency: dto.currency.toUpperCase() }),
+        ...(dto.bomVersionId !== undefined && { bomVersionId: dto.bomVersionId }),
       },
     });
   }

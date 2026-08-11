@@ -4,12 +4,31 @@
 // OK Footwear ERP — Sprint 4, Orders Module
 // =============================================================================
 
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  UnauthorizedException,
+  Logger,
+} from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '@shared/database/prisma.service';
 import { DocNumberService } from './doc-number.service';
-import { CorrelationStore } from '@shared/logger/correlation-store';
 import { NotificationsService } from '@modules/system/services/notifications.service';
-import { CreateComplaintDto, UpdateRootCauseDto } from '../dto/complaints.dto';
+import { ComplaintResolvedEvent } from '../events/complaint-resolved.event';
+import {
+  CreateComplaintDto,
+  UpdateRootCauseDto,
+  UpdateComplaintStatusDto,
+} from '../dto/complaints.dto';
+import type { ComplaintStatus } from '@prisma/client';
+
+/** Allowed manual status transitions (resolved is terminal). */
+const ALLOWED_COMPLAINT_TRANSITIONS: Record<ComplaintStatus, ComplaintStatus[]> = {
+  open: ['under_investigation', 'resolved'],
+  under_investigation: ['resolved'],
+  resolved: [],
+};
 
 @Injectable()
 export class ComplaintsService {
@@ -19,6 +38,7 @@ export class ComplaintsService {
     private readonly prisma: PrismaService,
     private readonly docNumber: DocNumberService,
     private readonly notifications: NotificationsService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   // =========================================================================
@@ -58,7 +78,15 @@ export class ComplaintsService {
   // Create
   // =========================================================================
 
-  async create(orderId: string, dto: CreateComplaintDto) {
+  async create(orderId: string, dto: CreateComplaintDto, userId: string) {
+    if (!userId) {
+      throw new UnauthorizedException({
+        statusCode: 401,
+        message: 'Authentication required',
+        detail: 'A valid user identity is required to raise a complaint.',
+      });
+    }
+
     // Validate parent order exists
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
@@ -73,9 +101,6 @@ export class ComplaintsService {
       });
     }
 
-    // Get authenticated user from request context
-    const raisedBy = CorrelationStore.getStore()?.userId ?? 'system';
-
     return this.prisma.$transaction(async (tx) => {
       const complaintNumber = await this.docNumber.generate(tx, 'CMP');
 
@@ -86,7 +111,7 @@ export class ComplaintsService {
           type: dto.type,
           severity: dto.severity,
           description: dto.description,
-          raisedBy,
+          raisedBy: userId,
         },
       });
 
@@ -140,5 +165,54 @@ export class ComplaintsService {
       where: { id: complaintId },
       data: { rootCause: dto.rootCause },
     });
+  }
+
+  // =========================================================================
+  // Update Status (manual workflow including zero-CAPA resolve)
+  // =========================================================================
+
+  async updateStatus(complaintId: string, dto: UpdateComplaintStatusDto) {
+    const complaint = await this.prisma.complaint.findUnique({
+      where: { id: complaintId },
+    });
+
+    if (!complaint) {
+      throw new NotFoundException({
+        statusCode: 404,
+        message: 'Complaint not found',
+      });
+    }
+
+    const from = complaint.status;
+    const to = dto.status;
+
+    if (from === to) {
+      return complaint;
+    }
+
+    const allowed = ALLOWED_COMPLAINT_TRANSITIONS[from] ?? [];
+    if (!allowed.includes(to)) {
+      throw new BadRequestException({
+        statusCode: 422,
+        message: 'Invalid status transition',
+        detail: `Cannot transition complaint from '${from}' to '${to}'. Allowed: ${allowed.join(', ') || 'none'}.`,
+      });
+    }
+
+    const updated = await this.prisma.complaint.update({
+      where: { id: complaintId },
+      data: {
+        status: to,
+        ...(to === 'resolved' && { resolvedAt: new Date() }),
+      },
+    });
+
+    if (to === 'resolved') {
+      const event = new ComplaintResolvedEvent({ complaintId });
+      this.eventEmitter.emit('complaint.resolved', event);
+      this.logger.log(`ComplaintResolvedEvent emitted for complaint ${complaintId}`);
+    }
+
+    return updated;
   }
 }

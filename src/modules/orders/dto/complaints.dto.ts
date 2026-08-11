@@ -4,9 +4,9 @@
 // OK Footwear ERP — Sprint 4, Orders Module
 // =============================================================================
 
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsOptional, IsEnum } from 'class-validator';
-import type { ComplaintType, Severity } from '@prisma/client';
+import { ApiProperty } from '@nestjs/swagger';
+import { IsString, IsEnum, IsIn } from 'class-validator';
+import type { ComplaintType, Severity, ComplaintStatus } from '@prisma/client';
 
 export class CreateComplaintDto {
   @ApiProperty({ enum: ['quality', 'delivery', 'packaging', 'documentation', 'other'] })
@@ -26,4 +26,13 @@ export class UpdateRootCauseDto {
   @ApiProperty({ description: 'Root cause analysis' })
   @IsString()
   rootCause!: string;
+}
+
+export class UpdateComplaintStatusDto {
+  @ApiProperty({
+    enum: ['open', 'under_investigation', 'resolved'],
+    description: 'Target complaint status',
+  })
+  @IsIn(['open', 'under_investigation', 'resolved'])
+  status!: ComplaintStatus;
 }

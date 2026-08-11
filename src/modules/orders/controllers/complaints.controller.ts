@@ -4,14 +4,28 @@
 // OK Footwear ERP — Sprint 4, Orders Module
 // =============================================================================
 
-import { Controller, Get, Post, Patch, Body, Param, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Body,
+  Param,
+  UseGuards,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
+import { JwtAuthGuard, type JwtPayload } from '@common/guards/jwt-auth.guard';
 import { RbacGuard, Permissions } from '@common/guards/rbac.guard';
+import { CurrentUser } from '@common/decorators/auth.decorator';
 import { AuditTable } from '@common/decorators/audit.decorator';
 import { ValidateOrderPipe } from '../pipes/validate-order.pipe';
 import { ComplaintsService } from '../services/complaints.service';
-import { CreateComplaintDto, UpdateRootCauseDto } from '../dto/complaints.dto';
+import {
+  CreateComplaintDto,
+  UpdateRootCauseDto,
+  UpdateComplaintStatusDto,
+} from '../dto/complaints.dto';
 
 @ApiTags('Complaints')
 @ApiBearerAuth()
@@ -33,8 +47,16 @@ export class ComplaintsController {
   create(
     @Param('orderId', ValidateOrderPipe) order: { id: string },
     @Body() dto: CreateComplaintDto,
+    @CurrentUser() user: JwtPayload,
   ) {
-    return this.complaintsService.create(order.id, dto);
+    if (!user?.sub) {
+      throw new UnauthorizedException({
+        statusCode: 401,
+        message: 'Authentication required',
+        detail: 'A valid user identity is required to raise a complaint.',
+      });
+    }
+    return this.complaintsService.create(order.id, dto, user.sub);
   }
 
   @Get(':complaintId')
@@ -54,5 +76,16 @@ export class ComplaintsController {
     @Body() dto: UpdateRootCauseDto,
   ) {
     return this.complaintsService.updateRootCause(complaintId, dto);
+  }
+
+  @Patch(':complaintId/status')
+  @Permissions('orders:update')
+  @AuditTable('ord.complaints')
+  @ApiOperation({ summary: 'Transition complaint status (including manual resolve)' })
+  updateStatus(
+    @Param('complaintId') complaintId: string,
+    @Body() dto: UpdateComplaintStatusDto,
+  ) {
+    return this.complaintsService.updateStatus(complaintId, dto);
   }
 }

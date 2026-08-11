@@ -5,6 +5,7 @@ import { redisConfigSchema } from './redis.config';
 import { authConfigSchema } from './auth.config';
 import { awsConfigSchema } from './aws.config';
 import { smsConfigSchema } from './sms.config';
+import { procurementConfigSchema } from './procurement.config';
 
 // =============================================================================
 // Combined Application Configuration Schema
@@ -46,4 +47,5 @@ export const appConfigSchema = Joi.object({
   .concat(redisConfigSchema)
   .concat(authConfigSchema)
   .concat(awsConfigSchema)
-  .concat(smsConfigSchema);
+  .concat(smsConfigSchema)
+  .concat(procurementConfigSchema);

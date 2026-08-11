@@ -10,8 +10,7 @@
 //   the complaint update fails, both roll back.
 //
 //   Zero-CAPA edge case: If total === 0, auto-close does NOT trigger.
-//   A complaint with zero CAPA actions must be manually closed via
-//   ComplaintsService (future enhancement).
+//   A complaint with zero CAPA actions is closed via ComplaintsService.updateStatus.
 // =============================================================================
 
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';

@@ -6,13 +6,14 @@ import type { RedisConfig } from './redis.config';
 import type { AuthConfig } from './auth.config';
 import type { AwsConfig } from './aws.config';
 import type { SmsConfig } from './sms.config';
+import type { ProcurementConfig } from './procurement.config';
 
 // =============================================================================
 // AppConfigService — Typed, namespaced configuration facade
 // =============================================================================
 //
 // Wraps @nestjs/config's ConfigService to provide typed, structured access
-// to all 5 configuration namespaces.
+// to configuration namespaces.
 //
 // Design decisions:
 // - Namespace getters return the full typed config object — callers destructure
@@ -76,6 +77,11 @@ export class AppConfigService {
   /** SSL Wireless SMS gateway configuration. */
   get sms(): SmsConfig {
     return this.configService.getOrThrow<SmsConfig>('sms');
+  }
+
+  /** Procurement thresholds, TDS, invoice match tolerance. */
+  get procurement(): ProcurementConfig {
+    return this.configService.getOrThrow<ProcurementConfig>('procurement');
   }
 
   // ---------------------------------------------------------------------------

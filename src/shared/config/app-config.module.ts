@@ -6,6 +6,7 @@ import { redisConfig } from './redis.config';
 import { authConfig } from './auth.config';
 import { awsConfig } from './aws.config';
 import { smsConfig } from './sms.config';
+import { procurementConfig } from './procurement.config';
 
 import { appConfigSchema } from './app-config.schema';
 import { AppConfigService } from './app-config.service';
@@ -44,10 +45,17 @@ import { AppConfigService } from './app-config.service';
       // Env file loading — .env.local overrides .env
       envFilePath: ['.env.local', '.env'],
 
-      // Load all 5 namespace configs
-      load: [databaseConfig, redisConfig, authConfig, awsConfig, smsConfig],
+      // Load namespace configs
+      load: [
+        databaseConfig,
+        redisConfig,
+        authConfig,
+        awsConfig,
+        smsConfig,
+        procurementConfig,
+      ],
 
-      // Combined Joi schema covering all 5 namespaces
+      // Combined Joi schema covering all namespaces
       validationSchema: appConfigSchema,
 
       validationOptions: {

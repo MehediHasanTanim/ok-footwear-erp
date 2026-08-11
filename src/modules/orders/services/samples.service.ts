@@ -69,18 +69,22 @@ export class SamplesService {
 
     return this.prisma.$transaction(async (tx) => {
       // Determine round number: use provided or auto-increment.
-      // We lock the samples rows for this order to prevent concurrent
-      // round collisions (SELECT ... FOR UPDATE).
+      // PG forbids FOR UPDATE with aggregates (MAX), so lock the parent
+      // order row to serialize concurrent sample creates, then read MAX.
       let roundNumber: number;
 
       if (dto.roundNumber) {
         roundNumber = dto.roundNumber;
       } else {
+        await tx.$queryRawUnsafe(
+          `SELECT id FROM ord.orders WHERE id = $1::uuid FOR UPDATE`,
+          orderId,
+        );
+
         const existing = await tx.$queryRawUnsafe<Array<{ max_round: number }>>(
           `SELECT COALESCE(MAX(round_number), 0) AS max_round
            FROM ord.samples
-           WHERE order_id = $1::uuid
-           FOR UPDATE`,
+           WHERE order_id = $1::uuid`,
           orderId,
         );
         roundNumber = Number(existing[0]!.max_round) + 1;
