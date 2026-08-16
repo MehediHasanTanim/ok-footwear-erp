@@ -13,6 +13,7 @@ import {
   GlEntryQueryDto,
   PostJournalDto,
   TrialBalanceQueryDto,
+  UpdateJournalDto,
 } from '../dto/gl.dto';
 
 @Injectable()
@@ -35,6 +36,22 @@ export class GlService {
       lines: dto.lines,
       postedBy: userId,
     });
+  }
+
+  async updateEntry(id: string, dto: UpdateJournalDto) {
+    return this.finance.updateJournal(id, {
+      periodId: dto.periodId,
+      entryDate: dto.entryDate,
+      narration: dto.narration,
+      entryType: dto.entryType,
+      sourceModule: dto.sourceModule,
+      sourceId: dto.sourceId,
+      lines: dto.lines,
+    });
+  }
+
+  async deleteEntry(id: string) {
+    return this.finance.deleteJournal(id);
   }
 
   async findAllEntries(query: GlEntryQueryDto) {

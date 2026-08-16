@@ -98,7 +98,7 @@ export class QuotationsController {
   @Post(':quotationId/populate-from-bom')
   @Permissions('orders:update')
   @ApiOperation({
-    summary: 'Auto-populate cost from BOM version (501 until Manufacturing/BOM)',
+    summary: 'Auto-populate quotation cost from an approved BOM cost sheet',
   })
   populateFromBom(
     @Param('quotationId') quotationId: string,

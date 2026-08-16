@@ -19,6 +19,12 @@ describe('FinanceService.postJournal (TC-FIN-U-001…003)', () => {
   let service: FinanceService;
   let prisma: {
     glPeriod: { findUnique: jest.Mock };
+    glEntry: {
+      create: jest.Mock;
+      findUnique: jest.Mock;
+      update: jest.Mock;
+      delete: jest.Mock;
+    };
     chartOfAccount: { findMany: jest.Mock };
     $transaction: jest.Mock;
     $queryRaw: jest.Mock;
@@ -58,6 +64,12 @@ describe('FinanceService.postJournal (TC-FIN-U-001…003)', () => {
           periodMonth: 8,
         }),
       },
+      glEntry: {
+        create: txGlEntryCreate,
+        findUnique: jest.fn(),
+        update: jest.fn(),
+        delete: jest.fn(),
+      },
       chartOfAccount: {
         findMany: jest.fn().mockResolvedValue([
           { id: ACC_DR, isActive: true },
@@ -66,8 +78,13 @@ describe('FinanceService.postJournal (TC-FIN-U-001…003)', () => {
       },
       $transaction: jest.fn(async (fn: (tx: unknown) => Promise<unknown>) => {
         const tx = {
-          glEntry: { create: txGlEntryCreate },
+          glEntry: {
+            create: txGlEntryCreate,
+            update: prisma.glEntry.update,
+            delete: prisma.glEntry.delete,
+          },
           $queryRaw: txQueryRaw,
+          $executeRaw: jest.fn().mockResolvedValue(1),
         };
         return fn(tx);
       }),
@@ -171,6 +188,78 @@ describe('FinanceService.postJournal (TC-FIN-U-001…003)', () => {
       expect(resp.message).toBe('Cannot post to a locked GL period');
     }
 
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('updates narration on a journal in an open period', async () => {
+    const posted = {
+      id: 'e1',
+      entryNumber: 'JV-000001',
+      periodId: PERIOD_ID,
+      entryDate: new Date('2026-08-01'),
+      status: 'posted',
+      narration: 'Test journal',
+      entryType: 'manual',
+      sourceModule: null,
+      sourceId: null,
+      period: { id: PERIOD_ID, status: 'open' },
+    };
+    prisma.glEntry.findUnique
+      .mockResolvedValueOnce(posted)
+      .mockResolvedValueOnce({ ...posted, narration: 'Updated', period: posted.period });
+    prisma.glEntry.update.mockResolvedValue({ ...posted, narration: 'Updated' });
+
+    const result = await service.updateJournal('e1', { narration: 'Updated' });
+    expect(result.narration).toBe('Updated');
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects update when period is locked', async () => {
+    prisma.glEntry.findUnique.mockResolvedValue({
+      id: 'e1',
+      status: 'posted',
+      periodId: PERIOD_ID,
+      period: { id: PERIOD_ID, status: 'locked' },
+    });
+
+    await expect(service.updateJournal('e1', { narration: 'Nope' })).rejects.toBeInstanceOf(
+      UnprocessableEntityException,
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('deletes a journal in an open period', async () => {
+    prisma.glEntry.findUnique.mockResolvedValue({
+      id: 'e1',
+      entryNumber: 'JV-000001',
+      status: 'posted',
+      period: { id: PERIOD_ID, status: 'open' },
+      buyerInvoices: [],
+      bankTransactions: [],
+      reversals: [],
+    });
+    prisma.glEntry.delete.mockResolvedValue({ id: 'e1' });
+
+    const result = await service.deleteJournal('e1');
+    expect(result.deleted).toBe(true);
+    expect(result.entryNumber).toBe('JV-000001');
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects delete when journal is linked to AR', async () => {
+    prisma.glEntry.findUnique.mockResolvedValue({
+      id: 'e1',
+      entryNumber: 'JV-000001',
+      status: 'posted',
+      period: { id: PERIOD_ID, status: 'open' },
+      buyerInvoices: [{ id: 'inv1' }],
+      bankTransactions: [],
+      reversals: [],
+    });
+
+    await expect(service.deleteJournal('e1')).rejects.toBeInstanceOf(
+      UnprocessableEntityException,
+    );
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });

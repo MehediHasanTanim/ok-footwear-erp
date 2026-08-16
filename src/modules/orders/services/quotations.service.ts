@@ -4,11 +4,11 @@
 // OK Footwear ERP — Sprint 4, Orders Module
 // =============================================================================
 
-import { Injectable, NotFoundException, ConflictException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException, Logger, UnprocessableEntityException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '@shared/database/prisma.service';
 import { DocNumberService } from './doc-number.service';
-import { NotImplementedException } from '@common/exceptions/not-implemented.exception';
+import { CostSheetsService } from '@modules/manufacturing/services/cost-sheets.service';
 import { QuotationWonEvent } from '../events/quotation-won.event';
 import { CreateQuotationDto, UpdateQuotationDto, CloseQuotationDto } from '../dto/quotations.dto';
 
@@ -20,6 +20,7 @@ export class QuotationsService {
     private readonly prisma: PrismaService,
     private readonly docNumber: DocNumberService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly costSheets: CostSheetsService,
   ) {}
 
   // =========================================================================
@@ -271,28 +272,49 @@ export class QuotationsService {
     };
   }
 
-  // =========================================================================
-  // autoPopulateCostFromBom — STUB (Sprint 5 dependency)
-  // =========================================================================
-
   /**
-   * Auto-populate quotation cost breakdown from a BOM version.
-   *
-   * STUB — The BOM module (ord.bom) is planned for Sprint 5.
-   * This method will be fully implemented once the BOM module is available.
-   *
-   * @throws NotImplementedException with a message pointing to Sprint 5.
+   * Fill quotation totalCost / quotedPrice from the BOM template cost sheet.
    */
-  async autoPopulateCostFromBom(quotationId: string, bomVersionId: string): Promise<void> {
-    this.logger.warn({
-      message: 'autoPopulateCostFromBom called but BOM module not yet available',
-      quotationId,
-      bomVersionId,
-    });
+  async autoPopulateCostFromBom(quotationId: string, bomVersionId: string) {
+    const quotation = await this.prisma.quotation.findUnique({ where: { id: quotationId } });
+    if (!quotation) {
+      throw new NotFoundException({ statusCode: 404, message: 'Quotation not found' });
+    }
+    if (quotation.status !== 'draft') {
+      throw new BadRequestException({
+        statusCode: 400,
+        message: 'Only draft quotations can be populated from a BOM',
+      });
+    }
 
-    throw new NotImplementedException(
-      'BOM-based cost auto-population',
-      'Sprint 5',
-    );
+    const bom = await this.prisma.bomHeader.findUnique({ where: { id: bomVersionId } });
+    if (!bom) {
+      throw new NotFoundException({ statusCode: 404, message: 'BOM not found' });
+    }
+    if (bom.status !== 'approved') {
+      throw new UnprocessableEntityException({
+        statusCode: 422,
+        message: 'Cost populate requires an approved BOM',
+      });
+    }
+
+    const sheet = await this.costSheets.findByBom(bomVersionId);
+
+    return this.prisma.quotation.update({
+      where: { id: quotationId },
+      data: {
+        bomVersionId,
+        totalCost: sheet.totalCost,
+        quotedPrice: sheet.sellingPrice,
+        costBreakdown: {
+          materialCost: sheet.materialCost,
+          trimsCost: sheet.trimsCost,
+          labourCost: sheet.labourCost,
+          overheadCost: sheet.overheadCost,
+          targetMarginPct: sheet.targetMarginPct,
+          sellingPrice: sheet.sellingPrice,
+        },
+      },
+    });
   }
 }

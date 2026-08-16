@@ -29,6 +29,10 @@ export interface PostJournalInput {
   postedBy: string;
 }
 
+export type UpdateJournalInput = Partial<
+  Omit<PostJournalInput, 'postedBy' | 'reversalOf'>
+>;
+
 export interface GlEntryLineRow {
   id: string;
   gl_entry_id: string;

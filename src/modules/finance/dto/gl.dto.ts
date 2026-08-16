@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import {
   ArrayMinSize,
   IsArray,
@@ -91,6 +91,8 @@ export class PostJournalDto {
   @Type(() => JournalLineDto)
   lines!: JournalLineDto[];
 }
+
+export class UpdateJournalDto extends PartialType(PostJournalDto) {}
 
 export class GlEntryQueryDto extends PaginationDto {
   @ApiPropertyOptional()

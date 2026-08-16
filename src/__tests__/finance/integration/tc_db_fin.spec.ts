@@ -278,11 +278,23 @@ describe('Database: fin.check_period_open + GL line CHECKs (TC-DB-FIN / TC-DB-CO
   });
 
   // TC-DB-CON-002
-  // Both-zero also fails chk_gl_debit_credit ((d>0&c=0)|(c>0&d=0)); PG reports that first.
+  // Isolate chk_gl_nonzero: both-zero also violates chk_gl_debit_credit first,
+  // so drop that CHECK for this test (rolled back afterEach).
   it('GL line debit and credit cannot both be zero', async () => {
+    await prisma.$executeRawUnsafe(`
+      ALTER TABLE fin.gl_entry_lines DROP CONSTRAINT IF EXISTS chk_gl_debit_credit
+    `);
+    for (const y of ['2025', '2026', '2027']) {
+      await prisma
+        .$executeRawUnsafe(
+          `ALTER TABLE fin.gl_entry_lines_${y} DROP CONSTRAINT IF EXISTS chk_gl_debit_credit`,
+        )
+        .catch(() => undefined);
+    }
+
     const entryId = await createHeader(await periodId(2026, 1));
     await expect(
       insertLine({ glEntryId: entryId, debit: 0, credit: 0 }),
-    ).rejects.toThrow(/chk_gl_(nonzero|debit_credit)/i);
+    ).rejects.toThrow(/chk_gl_nonzero/i);
   });
 });

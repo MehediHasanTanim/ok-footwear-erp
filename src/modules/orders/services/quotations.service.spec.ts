@@ -12,6 +12,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '@shared/database/prisma.service';
 import { DocNumberService } from './doc-number.service';
 import { QuotationsService } from './quotations.service';
+import { CostSheetsService } from '@modules/manufacturing/services/cost-sheets.service';
 import { QuotationWonEvent } from '../events/quotation-won.event';
 
 // ---------------------------------------------------------------------------
@@ -32,6 +33,9 @@ const mockPrisma = {
     update: jest.fn(),
     groupBy: jest.fn(),
   },
+  bomHeader: {
+    findUnique: jest.fn(),
+  },
   $transaction: jest.fn(),
 };
 
@@ -49,9 +53,11 @@ const mockEventEmitter = {
 
 describe('QuotationsService', () => {
   let service: QuotationsService;
+  let costSheets: { findByBom: jest.Mock };
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    costSheets = { findByBom: jest.fn() };
 
     // Default: $transaction forwards to the callback
     mockPrisma.$transaction.mockImplementation(
@@ -64,6 +70,7 @@ describe('QuotationsService', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: DocNumberService, useValue: mockDocNumber },
         { provide: EventEmitter2, useValue: mockEventEmitter },
+        { provide: CostSheetsService, useValue: costSheets },
       ],
     }).compile();
 
@@ -305,15 +312,25 @@ describe('QuotationsService', () => {
   });
 
   describe('autoPopulateCostFromBom()', () => {
-    it('throws NotImplementedException (501) until Manufacturing/BOM', async () => {
-      await expect(
-        service.autoPopulateCostFromBom('q-1', '550e8400-e29b-41d4-a716-446655440099'),
-      ).rejects.toMatchObject({
-        status: 501,
-        response: expect.objectContaining({
-          message: expect.stringContaining('not yet implemented'),
-        }),
+    it('fills cost from approved BOM cost sheet', async () => {
+      mockPrisma.quotation.findUnique.mockResolvedValue({
+        id: 'q-1',
+        status: 'draft',
       });
+      mockPrisma.bomHeader.findUnique.mockResolvedValue({ id: 'bom-1', status: 'approved' });
+      mockPrisma.quotation.update.mockResolvedValue({ id: 'q-1', totalCost: 120 });
+      costSheets.findByBom.mockResolvedValue({
+        totalCost: 100,
+        sellingPrice: 120,
+        materialCost: 70,
+        trimsCost: 10,
+        labourCost: 15,
+        overheadCost: 5,
+        targetMarginPct: 20,
+      });
+
+      await service.autoPopulateCostFromBom('q-1', 'bom-1');
+      expect(mockPrisma.quotation.update).toHaveBeenCalled();
     });
   });
 });

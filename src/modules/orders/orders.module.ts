@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 
+import { ManufacturingModule } from '@modules/manufacturing/manufacturing.module';
+
 import { BuyersController } from './controllers/buyers.controller';
 import { ArticlesController } from './controllers/articles.controller';
 import { OrdersController } from './controllers/orders.controller';
@@ -42,6 +44,7 @@ import { SSEService } from '@modules/system/services/sse.service';
         expiresIn: (process.env['JWT_ACCESS_TTL'] ?? '8h') as unknown as number,
       },
     }),
+    ManufacturingModule,
   ],
   controllers: [
     BuyersController,

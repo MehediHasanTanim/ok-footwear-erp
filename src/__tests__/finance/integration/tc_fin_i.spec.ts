@@ -1,5 +1,5 @@
 // =============================================================================
-// TC-FIN-I-001…003 — HTTP POST /finance/gl/entries
+// TC-FIN-I-001…003 + PATCH/DELETE /api/v1/finance/gl/entries
 // =============================================================================
 
 import {
@@ -228,6 +228,7 @@ describe('Finance HTTP integration (TC-FIN-I-001…003)', () => {
       .compile();
 
     app = module.createNestApplication();
+    app.setGlobalPrefix('api/v1');
     app.useGlobalPipes(
       new ValidationPipe({
         whitelist: true,
@@ -240,7 +241,12 @@ describe('Finance HTTP integration (TC-FIN-I-001…003)', () => {
       (req as Request & { user?: unknown }).user = {
         sub: USER_ID,
         email: 'fin-i@okfootwear.com',
-        permissions: ['finance:read', 'finance:create'],
+        permissions: [
+          'finance:read',
+          'finance:create',
+          'finance:update',
+          'finance:delete',
+        ],
       };
       next();
     });
@@ -264,9 +270,9 @@ describe('Finance HTTP integration (TC-FIN-I-001…003)', () => {
     lockedPeriodId = locked!.id;
   });
 
-  // TC-FIN-I-001
-  it('POST /finance/gl/entries → 201 with status=posted for balanced journal', async () => {
-    const res = await http.post('/finance/gl/entries').send({
+  // TC-FIN-I-001 — production path is /api/v1/finance/gl/entries (not /api/gl/entries)
+  it('POST /api/v1/finance/gl/entries → 201 with status=posted for balanced journal', async () => {
+    const res = await http.post('/api/v1/finance/gl/entries').send({
       periodId: openPeriodId,
       entryDate: '2026-08-15',
       narration: 'Balanced AR entry',
@@ -283,8 +289,8 @@ describe('Finance HTTP integration (TC-FIN-I-001…003)', () => {
   });
 
   // TC-FIN-I-002
-  it('POST /finance/gl/entries → 422 for unbalanced journal', async () => {
-    const res = await http.post('/finance/gl/entries').send({
+  it('POST /api/v1/finance/gl/entries → 422 for unbalanced journal', async () => {
+    const res = await http.post('/api/v1/finance/gl/entries').send({
       periodId: openPeriodId,
       entryDate: '2026-08-15',
       narration: 'Unbalanced',
@@ -299,8 +305,8 @@ describe('Finance HTTP integration (TC-FIN-I-001…003)', () => {
   });
 
   // TC-FIN-I-003
-  it('POST /finance/gl/entries → 422 when posting to locked period', async () => {
-    const res = await http.post('/finance/gl/entries').send({
+  it('POST /api/v1/finance/gl/entries → 422 when posting to locked period', async () => {
+    const res = await http.post('/api/v1/finance/gl/entries').send({
       periodId: lockedPeriodId,
       entryDate: '2026-09-15',
       narration: 'Locked period',
@@ -310,6 +316,90 @@ describe('Finance HTTP integration (TC-FIN-I-001…003)', () => {
       ],
     });
 
+    expect(res.status).toBe(422);
+    expect(res.body.detail).toMatch(/locked/i);
+  });
+
+  it('PATCH /api/v1/finance/gl/entries/:id updates narration in an open period', async () => {
+    const created = await http.post('/api/v1/finance/gl/entries').send({
+      periodId: openPeriodId,
+      entryDate: '2026-08-15',
+      narration: 'Original',
+      lines: [
+        { accountId: ACC_DR, debit: 200, credit: 0 },
+        { accountId: ACC_CR, debit: 0, credit: 200 },
+      ],
+    });
+    expect(created.status).toBe(201);
+
+    const res = await http
+      .patch(`/api/v1/finance/gl/entries/${created.body.id}`)
+      .send({ narration: 'Updated sample journal' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.narration).toBe('Updated sample journal');
+    expect(res.body.status).toBe('posted');
+  });
+
+  it('PATCH /api/v1/finance/gl/entries/:id → 422 when replacement lines are unbalanced', async () => {
+    const created = await http.post('/api/v1/finance/gl/entries').send({
+      periodId: openPeriodId,
+      entryDate: '2026-08-15',
+      narration: 'To patch',
+      lines: [
+        { accountId: ACC_DR, debit: 200, credit: 0 },
+        { accountId: ACC_CR, debit: 0, credit: 200 },
+      ],
+    });
+
+    const res = await http.patch(`/api/v1/finance/gl/entries/${created.body.id}`).send({
+      lines: [
+        { accountId: ACC_DR, debit: 200, credit: 0 },
+        { accountId: ACC_CR, debit: 0, credit: 50 },
+      ],
+    });
+
+    expect(res.status).toBe(422);
+    expect(res.body.detail).toMatch(/balance/i);
+  });
+
+  it('DELETE /api/v1/finance/gl/entries/:id removes a journal in an open period', async () => {
+    const created = await http.post('/api/v1/finance/gl/entries').send({
+      periodId: openPeriodId,
+      entryDate: '2026-08-15',
+      narration: 'To delete',
+      lines: [
+        { accountId: ACC_DR, debit: 75, credit: 0 },
+        { accountId: ACC_CR, debit: 0, credit: 75 },
+      ],
+    });
+    expect(created.status).toBe(201);
+
+    const res = await http.delete(`/api/v1/finance/gl/entries/${created.body.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(true);
+
+    const get = await http.get(`/api/v1/finance/gl/entries/${created.body.id}`);
+    expect(get.status).toBe(404);
+  });
+
+  it('DELETE /api/v1/finance/gl/entries/:id → 422 when period is locked', async () => {
+    const created = await http.post('/api/v1/finance/gl/entries').send({
+      periodId: openPeriodId,
+      entryDate: '2026-08-15',
+      narration: 'Will lock',
+      lines: [
+        { accountId: ACC_DR, debit: 10, credit: 0 },
+        { accountId: ACC_CR, debit: 0, credit: 10 },
+      ],
+    });
+
+    await prisma.glPeriod.update({
+      where: { id: openPeriodId },
+      data: { status: 'locked' },
+    });
+
+    const res = await http.delete(`/api/v1/finance/gl/entries/${created.body.id}`);
     expect(res.status).toBe(422);
     expect(res.body.detail).toMatch(/locked/i);
   });

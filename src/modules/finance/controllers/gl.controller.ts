@@ -1,9 +1,11 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Param,
+  Patch,
   Post,
   Query,
   UnauthorizedException,
@@ -21,6 +23,7 @@ import {
   GlEntryQueryDto,
   PostJournalDto,
   TrialBalanceQueryDto,
+  UpdateJournalDto,
 } from '../dto/gl.dto';
 
 @ApiTags('Finance — GL Entries')
@@ -52,6 +55,21 @@ export class GlEntriesController {
       throw new UnauthorizedException({ statusCode: 401, message: 'Authentication required' });
     }
     return this.gl.postJournal(dto, user.sub);
+  }
+
+  @Patch(':id')
+  @Permissions('finance:update')
+  @ApiOperation({ summary: 'Update a journal in an open GL period' })
+  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateJournalDto) {
+    return this.gl.updateEntry(id, dto);
+  }
+
+  @Delete(':id')
+  @Permissions('finance:delete')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Delete a journal in an open GL period' })
+  remove(@Param('id', ParseUUIDPipe) id: string) {
+    return this.gl.deleteEntry(id);
   }
 }
 
