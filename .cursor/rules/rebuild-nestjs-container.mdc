@@ -1,0 +1,15 @@
+---
+description: Rebuild the NestJS Docker container after any code or schema changes
+alwaysApply: true
+---
+
+# Rebuild NestJS container after changes
+
+After making backend code, Prisma schema, or dependency changes in this repo, rebuild and recreate the NestJS container before considering the work done:
+
+```bash
+docker compose up -d --build nestjs   # entrypoint runs prisma migrate deploy on start
+curl http://localhost:7100/api/v1/health
+```
+
+Do not skip this because an earlier rebuild already ran in the session. Migrations apply automatically via `scripts/docker-entrypoint.sh` when `DIRECT_DATABASE_URL` is set in `.env.local`. See `docs/Plan/Docker_Migration_Ops.md` if schema errors persist.

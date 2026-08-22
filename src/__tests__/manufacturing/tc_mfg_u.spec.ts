@@ -71,6 +71,27 @@ describe('Manufacturing unit (TC-MFG-U-001/002/005)', () => {
         USER_ID,
       ),
     ).rejects.toBeInstanceOf(ConflictException);
+
+    try {
+      await service.create(
+        {
+          articleId: ARTICLE_ID,
+          version: '1.0',
+          lines: [
+            {
+              itemId: ITEM_ID,
+              componentType: 'upper_material',
+              qtyPerUnit: 0.5,
+              uom: 'M',
+            },
+          ],
+        },
+        USER_ID,
+      );
+    } catch (err) {
+      const resp = (err as ConflictException).getResponse() as { message: string };
+      expect(resp.message).toBe('BOM version 1.0 already exists for this article');
+    }
   });
 
   it('TC-MFG-U-002 production blocked without approved BOM', async () => {
@@ -78,6 +99,17 @@ describe('Manufacturing unit (TC-MFG-U-001/002/005)', () => {
     await expect(service.assertApprovedBom(ARTICLE_ID)).rejects.toBeInstanceOf(
       UnprocessableEntityException,
     );
+
+    try {
+      await service.assertApprovedBom(ARTICLE_ID);
+    } catch (err) {
+      const resp = (err as UnprocessableEntityException).getResponse() as {
+        message: string;
+      };
+      expect(resp.message).toBe(
+        'Production is blocked: no approved BOM for this article',
+      );
+    }
 
     const guard = new ProductionBlockGuard(service);
     const ctx = {
@@ -89,6 +121,9 @@ describe('Manufacturing unit (TC-MFG-U-001/002/005)', () => {
     await expect(guard.canActivate(ctx)).rejects.toBeInstanceOf(
       UnprocessableEntityException,
     );
+
+    prisma.bomHeader.count.mockResolvedValue(1);
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
   });
 
   it('archives previous approved version on approve', async () => {
@@ -125,6 +160,7 @@ describe('Manufacturing unit (TC-MFG-U-001/002/005)', () => {
   });
 
   it('TC-MFG-U-005 selling_price = total_cost × (1 + marginPct/100)', () => {
+    expect(computeSellingPrice(10, 25)).toBe(12.5);
     expect(computeSellingPrice(100, 20)).toBe(120);
     expect(computeSellingPrice(50.5, 10)).toBe(55.55);
   });

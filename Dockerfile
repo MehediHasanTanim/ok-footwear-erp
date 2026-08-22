@@ -80,6 +80,7 @@ COPY --chown=node:node --from=builder /app/dist ./dist
 COPY --chown=node:node --from=builder /app/node_modules ./node_modules
 COPY --chown=node:node --from=builder /app/package.json ./
 COPY --chown=node:node --from=builder /app/prisma ./prisma
+COPY --chown=node:node scripts/docker-entrypoint.sh ./docker-entrypoint.sh
 
 # --- Environment ---
 # NODE_ENV=production: enables production optimizations in NestJS, pino, etc.
@@ -98,6 +99,6 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=15s \
 
 # --- Runtime ---
 # tini: forward signals (SIGTERM → Node.js graceful shutdown)
-# Path aliases (@/*) are resolved at build time by tsc-alias — no runtime preload needed.
-ENTRYPOINT ["/sbin/tini", "--"]
+# docker-entrypoint.sh: prisma migrate deploy (DIRECT_DATABASE_URL) then exec CMD
+ENTRYPOINT ["/sbin/tini", "--", "sh", "./docker-entrypoint.sh"]
 CMD ["node", "dist/main"]

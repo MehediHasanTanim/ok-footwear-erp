@@ -137,7 +137,7 @@ describe('TC-DB-CON-003 / TC-DB-CON-004 order lines', () => {
           unitPrice: 10,
         },
       }),
-    ).rejects.toThrow(/chk_order_lines_quantity|quantity/i);
+    ).rejects.toThrow(/chk_order_lines_quantity_positive/);
   });
 
   it('TC-DB-CON-004 duplicate size_label on same order rejected', async () => {

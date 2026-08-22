@@ -39,4 +39,4 @@ DTO aliases: `qtyPerUnit` → `quantity_per_pair`; `targetMarginPct` → `margin
 | GET/POST | `/manufacturing/bom/:id/cost-sheet` | read / create |
 | PATCH | `/manufacturing/cost-sheets/:id` | update |
 
-After schema/code: `docker compose up -d --build nestjs` and `GET /api/v1/health`.
+After schema/code: `docker compose up -d --build nestjs` and `GET /api/v1/health`. Migrations auto-apply on container start — see [Docker_Migration_Ops.md](Docker_Migration_Ops.md).

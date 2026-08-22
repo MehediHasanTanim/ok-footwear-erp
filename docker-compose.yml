@@ -152,6 +152,8 @@ services:
 
   # ---------------------------------------------------------------------------
   # NestJS — OK Footwear ERP backend (built from local Dockerfile)
+  # On start: scripts/docker-entrypoint.sh runs prisma migrate deploy via
+  # DIRECT_DATABASE_URL (postgres:5432) before node dist/main.
   # ---------------------------------------------------------------------------
   nestjs:
     build:
