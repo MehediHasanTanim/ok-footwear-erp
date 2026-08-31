@@ -21,6 +21,7 @@ import { InventoryModule } from '@modules/inventory/inventory.module';
 import { FinanceModule } from '@modules/finance/finance.module';
 import { HrModule } from '@modules/hr/hr.module';
 import { BoardModule } from '@modules/board/board.module';
+import { SchedulerModule } from '@infrastructure/scheduler';
 
 /**
  * Root application module.
@@ -83,6 +84,7 @@ import { BoardModule } from '@modules/board/board.module';
     FinanceModule,
     HrModule,
     BoardModule,
+    SchedulerModule,
   ],
 })
 export class AppModule {}

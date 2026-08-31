@@ -19,6 +19,8 @@ import { SamplesService } from './services/samples.service';
 import { ComplaintsService } from './services/complaints.service';
 import { CapaActionsService } from './services/capa-actions.service';
 import { ValidateOrderPipe } from './pipes/validate-order.pipe';
+import { ProductionCompletedHandler } from './listeners/production-completed.handler';
+import { ProductionStartedHandler } from './listeners/production-started.handler';
 import { NotificationsService } from '@modules/system/services/notifications.service';
 import { SSEService } from '@modules/system/services/sse.service';
 
@@ -67,6 +69,8 @@ import { SSEService } from '@modules/system/services/sse.service';
     ValidateOrderPipe,
     NotificationsService,
     SSEService,
+    ProductionCompletedHandler,
+    ProductionStartedHandler,
   ],
   exports: [OrdersService, DocNumberService],
 })

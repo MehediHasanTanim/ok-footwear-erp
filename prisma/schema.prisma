@@ -278,8 +278,9 @@ model Article {
   updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
   deletedAt   DateTime? @map("deleted_at") @db.Timestamptz()
 
-  orders     Order[]
-  bomHeaders BomHeader[]
+  orders          Order[]
+  bomHeaders      BomHeader[]
+  articleRoutings ArticleRouting[]
 
   @@schema("ord")
   @@map("articles")
@@ -312,8 +313,9 @@ model Order {
   milestones   OrderMilestone[]
   quotations   Quotation[]
   samples      Sample[]
-  complaints   Complaint[]
-  costSheets   CostSheet[]
+  complaints       Complaint[]
+  costSheets       CostSheet[]
+  productionOrders ProductionOrder[]
 
   @@index([buyerId])
   @@index([articleId])
@@ -823,10 +825,11 @@ model BomHeader {
   updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
   createdBy  String    @map("created_by") @db.Uuid
 
-  article        Article           @relation(fields: [articleId], references: [id])
-  lines          BomLine[]
-  sizeOverrides  BomSizeOverride[]
-  costSheets     CostSheet[]
+  article          Article           @relation(fields: [articleId], references: [id])
+  lines            BomLine[]
+  sizeOverrides    BomSizeOverride[]
+  costSheets       CostSheet[]
+  productionOrders ProductionOrder[]
 
   @@unique([articleId, version])
   @@index([articleId])
@@ -898,6 +901,164 @@ model CostSheet {
   @@index([bomId])
   @@schema("mfg")
   @@map("cost_sheets")
+}
+
+model FactoryLine {
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code        String  @unique
+  name        String
+  floor       String?
+  capacityPrs Int     @default(0) @map("capacity_prs")
+  isActive    Boolean @default(true) @map("is_active")
+
+  productionOrders ProductionOrder[]
+  machines         Machine[]
+
+  @@schema("mfg")
+  @@map("factory_lines")
+}
+
+model Operation {
+  id       String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code     String  @unique
+  name     String
+  section  String
+  sam      Decimal? @db.Decimal(6, 2)
+  sequence Int      @default(0) @db.SmallInt
+
+  articleRoutings ArticleRouting[]
+  qcResults       QcResult[]
+
+  @@schema("mfg")
+  @@map("operations")
+}
+
+model ArticleRouting {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  articleId   String   @map("article_id") @db.Uuid
+  operationId String   @map("operation_id") @db.Uuid
+  sequence    Int      @db.SmallInt
+  samOverride Decimal? @map("sam_override") @db.Decimal(6, 2)
+
+  article   Article   @relation(fields: [articleId], references: [id])
+  operation Operation @relation(fields: [operationId], references: [id])
+
+  @@unique([articleId, sequence])
+  @@schema("mfg")
+  @@map("article_routings")
+}
+
+model ProductionOrder {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId       String    @map("order_id") @db.Uuid
+  factoryLineId String?   @map("factory_line_id") @db.Uuid
+  bomId         String    @map("bom_id") @db.Uuid
+  plannedQty    Int       @map("planned_qty")
+  producedQty   Int       @default(0) @map("produced_qty")
+  sizePlan      Json      @default("[]") @map("size_plan")
+  startDate     DateTime? @map("start_date") @db.Date
+  endDate       DateTime? @map("end_date") @db.Date
+  status        String    @default("planned")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  createdBy     String    @map("created_by") @db.Uuid
+
+  order       Order        @relation(fields: [orderId], references: [id])
+  factoryLine FactoryLine? @relation(fields: [factoryLineId], references: [id])
+  bom         BomHeader    @relation(fields: [bomId], references: [id])
+  qcResults   QcResult[]
+  scrapRecords ScrapRecord[]
+
+  @@index([orderId])
+  @@schema("mfg")
+  @@map("production_orders")
+}
+
+// daily_productions is PARTITIONED — not modeled in Prisma; use $queryRaw.
+
+model QcResult {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  productionOrderId String   @map("production_order_id") @db.Uuid
+  qcDate            DateTime @default(now()) @map("qc_date") @db.Date
+  qcType            String   @map("qc_type")
+  operationId       String?  @map("operation_id") @db.Uuid
+  inspectedQty      Int      @map("inspected_qty")
+  passedQty         Int      @map("passed_qty")
+  failedQty         Int      @map("failed_qty")
+  reworkQty         Int      @default(0) @map("rework_qty")
+  verdict           String
+  defectDetails     Json?    @map("defect_details")
+  inspectorId       String?  @map("inspector_id") @db.Uuid
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+  operation       Operation?      @relation(fields: [operationId], references: [id])
+
+  @@index([productionOrderId])
+  @@schema("mfg")
+  @@map("qc_results")
+}
+
+model Machine {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  machineCode   String    @unique @map("machine_code")
+  name          String
+  type          String
+  model         String?
+  manufacturer  String?
+  factoryLineId String?   @map("factory_line_id") @db.Uuid
+  purchaseDate  DateTime? @map("purchase_date") @db.Date
+  status        String    @default("active")
+  assetId       String?   @map("asset_id") @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  factoryLine  FactoryLine?          @relation(fields: [factoryLineId], references: [id])
+  maintenance  MachineMaintenance[]
+
+  @@schema("mfg")
+  @@map("machines")
+}
+
+model MachineMaintenance {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  machineId   String    @map("machine_id") @db.Uuid
+  maintType   String    @map("maint_type")
+  startTime   DateTime  @map("start_time") @db.Timestamptz()
+  endTime     DateTime? @map("end_time") @db.Timestamptz()
+  description String?   @db.Text
+  cost        Decimal?  @db.Decimal(10, 2)
+  performedBy String?   @map("performed_by")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  machine Machine @relation(fields: [machineId], references: [id])
+
+  @@index([machineId, startTime(sort: Desc)])
+  @@schema("mfg")
+  @@map("machine_maintenance")
+}
+
+model ScrapRecord {
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  productionOrderId    String    @map("production_order_id") @db.Uuid
+  scrapDate            DateTime  @default(now()) @map("scrap_date") @db.Date
+  scrapType            String    @map("scrap_type")
+  section              String
+  quantity             Decimal   @db.Decimal(10, 3)
+  uom                  String
+  unitValue            Decimal?  @map("unit_value") @db.Decimal(10, 4)
+  disposalMethod       String?   @map("disposal_method")
+  disposalAuthorisedBy String?   @map("disposal_authorised_by") @db.Uuid
+  saleAmount           Decimal?  @map("sale_amount") @db.Decimal(10, 2)
+  notes                String?   @db.Text
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  createdBy            String    @map("created_by") @db.Uuid
+
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+
+  @@index([productionOrderId])
+  @@schema("mfg")
+  @@map("scrap_records")
 }
 
 // =============================================================================
