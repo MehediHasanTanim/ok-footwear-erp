@@ -4,6 +4,7 @@ import { BullBoardModule } from '@bull-board/nestjs';
 import { ExpressAdapter } from '@bull-board/express';
 
 import { AppConfigModule } from '@shared/config/app-config.module';
+import { CryptoModule } from '@shared/crypto/crypto.module';
 import { DatabaseModule } from '@shared/database/database.module';
 import { LoggerModule } from '@shared/logger/logger.module';
 import { RedisModule } from '@infrastructure/redis';
@@ -42,6 +43,8 @@ import { SchedulerModule } from '@infrastructure/scheduler';
 
     // AppConfigModule registers ConfigModule.forRoot() globally with Joi validation
     AppConfigModule,
+
+    CryptoModule,
 
     // DatabaseModule provides PrismaService globally (PgBouncer transaction mode)
     DatabaseModule,

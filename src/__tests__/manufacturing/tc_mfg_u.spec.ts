@@ -233,6 +233,9 @@ describe('Manufacturing unit (TC-MFG-U-003/004/006)', () => {
     );
 
     expect(result.efficiencyPct).toBe(80);
+    expect(result.targetQty).toBe(100);
+    expect(result.producedQty).toBe(80);
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
   });
 
   it('TC-MFG-U-004 efficiency_pct is NULL when target_qty is 0', async () => {
@@ -274,6 +277,8 @@ describe('Manufacturing unit (TC-MFG-U-003/004/006)', () => {
     );
 
     expect(result.efficiencyPct).toBeNull();
+    expect(result.targetQty).toBe(0);
+    expect(result.producedQty).toBe(50);
   });
 
   it('TC-MFG-U-006 locked daily production entry throws on update', async () => {
@@ -296,8 +301,12 @@ describe('Manufacturing unit (TC-MFG-U-003/004/006)', () => {
     ]);
 
     await expect(dailySvc.update('dp-locked', { producedQty: 90 })).rejects.toMatchObject({
-      response: { message: expect.stringMatching(/locked/i) },
+      response: {
+        statusCode: 422,
+        message: 'Daily production entry is locked and cannot be updated',
+      },
     });
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
   });
 
   it('AQL sample size for lot 500 returns 50 (Level II)', () => {

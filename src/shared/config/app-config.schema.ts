@@ -6,6 +6,7 @@ import { authConfigSchema } from './auth.config';
 import { awsConfigSchema } from './aws.config';
 import { smsConfigSchema } from './sms.config';
 import { procurementConfigSchema } from './procurement.config';
+import { hrConfigSchema } from './hr.config';
 
 // =============================================================================
 // Combined Application Configuration Schema
@@ -48,4 +49,5 @@ export const appConfigSchema = Joi.object({
   .concat(authConfigSchema)
   .concat(awsConfigSchema)
   .concat(smsConfigSchema)
-  .concat(procurementConfigSchema);
+  .concat(procurementConfigSchema)
+  .concat(hrConfigSchema);

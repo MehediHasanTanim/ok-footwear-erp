@@ -2,8 +2,11 @@
 export const SYSTEM_COA = {
   TRADE_RECEIVABLES: '1200',
   NET_SALARY_PAYABLE: '2100',
+  PF_PAYABLE: '2110',
+  GRATUITY_PROVISION: '2200',
   SALES_REVENUE: '4100',
   SALARY_EXPENSE: '5100',
+  GRATUITY_EXPENSE: '5200',
 } as const;
 
 export interface PostJournalLineInput {

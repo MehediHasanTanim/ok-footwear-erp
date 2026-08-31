@@ -1,4 +1,7 @@
+import { Test, TestingModule } from '@nestjs/testing';
 import { prisma } from '@test/helpers/integration-test-setup';
+import { PrismaService } from '@shared/database/prisma.service';
+import { DailyProductionService } from '@modules/manufacturing/services/daily-production.service';
 import {
   deployDailyProductionsPartition,
   seedMfgMasterData,
@@ -11,14 +14,17 @@ const ORDER_ID = '09111111-1111-4111-8111-111111111111';
 const BOM_ID = 'f9111111-1111-4111-8111-111111111111';
 const PO_ID = '09111111-1111-4111-8111-111111111112';
 const LINE_ID = '09111111-1111-4111-8111-111111111113';
-const OP_ID = 'x9111111-1111-4111-8111-111111111111';
+const LINE_ZERO_ID = '09111111-1111-4111-8111-111111111114';
 
 async function deployProductionSchema(): Promise<void> {
   await seedMfgMasterData();
   await deployDailyProductionsPartition();
 }
 
-async function seedPartitionFixtures(): Promise<void> {
+async function seedPartitionFixtures(): Promise<{
+  factoryLineId: string;
+  operationId: string;
+}> {
   await prisma.$executeRawUnsafe(
     `INSERT INTO sys.users (id, email, password_hash, first_name, last_name, is_active, created_at, updated_at)
      VALUES ($1::uuid, 'mfg-part@okfootwear.com', 'x', 'M', 'Part', true, NOW(), NOW())
@@ -119,11 +125,21 @@ async function seedPartitionFixtures(): Promise<void> {
     factoryLineId,
     operationId,
   );
+
+  return { factoryLineId, operationId };
 }
 
 describe('TC-DB-PART daily_productions partitions', () => {
+  let dailySvc: DailyProductionService;
+
   beforeAll(async () => {
     await deployProductionSchema();
+
+    const prismaSvc = prisma as unknown as PrismaService;
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [DailyProductionService, { provide: PrismaService, useValue: prismaSvc }],
+    }).compile();
+    dailySvc = module.get(DailyProductionService);
   }, 120_000);
 
   beforeEach(async () => {
@@ -146,10 +162,52 @@ describe('TC-DB-PART daily_productions partitions', () => {
     expect(rows).toHaveLength(0);
   });
 
-  it('efficiency_pct generated column returns 80 for target=100 produced=80', async () => {
+  it('TC-MFG-U-003 (DB) efficiency_pct = 80 for target=100 produced=80', async () => {
     const rows = await prisma.$queryRaw<{ efficiency_pct: number | null }[]>`
       SELECT efficiency_pct FROM mfg.daily_productions WHERE id = ${LINE_ID}::uuid
     `;
     expect(Number(rows[0]?.efficiency_pct)).toBe(80);
+  });
+
+  it('TC-MFG-U-004 (DB) efficiency_pct is NULL when target_qty is 0', async () => {
+    const refs = await prisma.$queryRaw<{ factory_line_id: string; operation_id: string }[]>`
+      SELECT factory_line_id, operation_id FROM mfg.daily_productions WHERE id = ${LINE_ID}::uuid
+    `;
+    const factoryLineId = refs[0]!.factory_line_id;
+    const operationId = refs[0]!.operation_id;
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO mfg.daily_productions (
+         id, production_order_id, prod_date, factory_line_id, operation_id,
+         shift, target_qty, produced_qty
+       ) VALUES (
+         $1::uuid, $2::uuid, $3::date, $4::uuid, $5::uuid,
+         'day', 0, 50
+       )`,
+      LINE_ZERO_ID,
+      PO_ID,
+      '2025-07-01',
+      factoryLineId,
+      operationId,
+    );
+
+    const rows = await prisma.$queryRaw<{ efficiency_pct: number | null }[]>`
+      SELECT efficiency_pct FROM mfg.daily_productions WHERE id = ${LINE_ZERO_ID}::uuid
+    `;
+    expect(rows[0]?.efficiency_pct).toBeNull();
+  });
+
+  it('TC-MFG-U-006 (DB) locked daily production entry throws on update', async () => {
+    await prisma.$executeRawUnsafe(
+      `UPDATE mfg.daily_productions SET locked = TRUE WHERE id = $1::uuid`,
+      LINE_ID,
+    );
+
+    await expect(dailySvc.update(LINE_ID, { producedQty: 90 })).rejects.toMatchObject({
+      response: {
+        statusCode: 422,
+        message: 'Daily production entry is locked and cannot be updated',
+      },
+    });
   });
 });

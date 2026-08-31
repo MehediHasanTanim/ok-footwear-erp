@@ -1355,27 +1355,296 @@ model BuyerInvoice {
 // =============================================================================
 // SCHEMA: hr — Human Resources
 // =============================================================================
-// Employees, payroll, leave, attendance, PF, gratuity.
+// Employees, leave, attendance, PF, gratuity. attendance_records is partitioned (raw SQL only).
+
+model Department {
+  id         String    @id @default(uuid()) @db.Uuid
+  code       String    @unique @db.Text
+  name       String    @db.Text
+  parentId   String?   @map("parent_id") @db.Uuid
+  headId     String?   @map("head_id") @db.Uuid
+  costCenter String?   @map("cost_center") @db.Text
+  location   String?   @db.Text
+  isActive   Boolean   @default(true) @map("is_active")
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  parent   Department?  @relation("DeptTree", fields: [parentId], references: [id])
+  children Department[] @relation("DeptTree")
+  head     Employee?    @relation("DeptHead", fields: [headId], references: [id])
+  employees Employee[]
+
+  @@schema("hr")
+  @@map("departments")
+}
+
+model Designation {
+  id    String @id @default(uuid()) @db.Uuid
+  code  String @unique @db.Text
+  title String @db.Text
+  level String @db.Text
+
+  employees Employee[]
+
+  @@schema("hr")
+  @@map("designations")
+}
 
 model Employee {
-  id             String    @id @default(uuid()) @db.Uuid
-  employeeCode   String    @unique @map("employee_code") @db.VarChar(20)
-  firstName      String    @map("first_name") @db.VarChar(100)
-  middleName     String?   @map("middle_name") @db.VarChar(100)
-  lastName       String    @map("last_name") @db.VarChar(100)
-  email          String?   @db.VarChar(255)
-  phone          String?   @db.VarChar(30)
-  department     String?   @db.VarChar(100)
-  designation    String?   @db.VarChar(100)
-  joiningDate    DateTime? @map("joining_date") @db.Date
-  employmentType String?   @map("employment_type") @db.VarChar(20) // permanent, contract, daily
-  isActive       Boolean   @default(true) @map("is_active")
-  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
-  deletedAt      DateTime? @map("deleted_at") @db.Timestamptz()
+  id                 String    @id @default(uuid()) @db.Uuid
+  employeeCode       String    @unique @map("employee_code") @db.Text
+  fullName           String    @map("full_name") @db.Text
+  email              String?   @db.Text
+  phone              String?   @db.Text
+  dateOfBirth        DateTime  @map("date_of_birth") @db.Date
+  gender             String    @db.Char(1)
+  nationality        String    @default("Bangladeshi") @db.Text
+  religion           String?   @db.Text
+  maritalStatus      String?   @map("marital_status") @db.Text
+  joinDate           DateTime  @map("join_date") @db.Date
+  confirmationDate   DateTime? @map("confirmation_date") @db.Date
+  departmentId       String    @map("department_id") @db.Uuid
+  designationId      String?   @map("designation_id") @db.Uuid
+  designation        String    @db.Text
+  employmentType     String    @map("employment_type") @db.Text
+  employeeCategory   String    @map("employee_category") @db.Text
+  factoryCategory    String?   @map("factory_category") @db.Text
+  reportingManagerId String?   @map("reporting_manager_id") @db.Uuid
+  status             String    @default("probation") @db.Text
+  basicSalary        Decimal   @default(0) @map("basic_salary") @db.Decimal(12, 2)
+  lastWorkingDate    DateTime? @map("last_working_date") @db.Date
+  photoUrl           String?   @map("photo_url") @db.Text
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt          DateTime? @map("deleted_at") @db.Timestamptz()
+  createdBy          String    @map("created_by") @db.Uuid
+
+  department       Department        @relation(fields: [departmentId], references: [id])
+  designationRef   Designation?      @relation(fields: [designationId], references: [id])
+  reportingManager Employee?         @relation("EmpManager", fields: [reportingManagerId], references: [id])
+  directReports    Employee[]        @relation("EmpManager")
+  headedDepartments Department[]     @relation("DeptHead")
+  secrets          EmployeeSecrets?
+  employmentEvents EmploymentEvent[]
+  leaveBalances    LeaveBalance[]
+  leaveRequests    LeaveRequest[]
+  pfAccount        PfAccount?
+  gratuityProvisions GratuityProvision[]
+  manualCorrections ManualCorrection[]
 
   @@schema("hr")
   @@map("employees")
+}
+
+model EmployeeSecrets {
+  employeeId           String   @id @map("employee_id") @db.Uuid
+  nidEncrypted         Bytes?   @map("nid_encrypted")
+  passportEncrypted    Bytes?   @map("passport_encrypted")
+  bankAccountEncrypted Bytes?   @map("bank_account_encrypted")
+  bankName             String?  @map("bank_name") @db.Text
+  bankBranch           String?  @map("bank_branch") @db.Text
+  routingNumber        String?  @map("routing_number") @db.Text
+  emergencyContact     Json?    @map("emergency_contact")
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@schema("hr")
+  @@map("employee_secrets")
+}
+
+model EmploymentEvent {
+  id            String    @id @default(uuid()) @db.Uuid
+  employeeId    String    @map("employee_id") @db.Uuid
+  eventType     String    @map("event_type") @db.Text
+  effectiveDate DateTime  @map("effective_date") @db.Date
+  oldDepartment String?   @map("old_department") @db.Uuid
+  newDepartment String?   @map("new_department") @db.Uuid
+  oldDesignation String?  @map("old_designation") @db.Text
+  newDesignation String?  @map("new_designation") @db.Text
+  oldBasic      Decimal?  @map("old_basic") @db.Decimal(12, 2)
+  newBasic      Decimal?  @map("new_basic") @db.Decimal(12, 2)
+  reason        String?   @db.Text
+  notes         String?   @db.Text
+  approvedBy    String    @map("approved_by") @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  createdBy     String    @map("created_by") @db.Uuid
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@index([employeeId, effectiveDate(sort: Desc)], map: "idx_emp_events")
+  @@schema("hr")
+  @@map("employment_events")
+}
+
+model LeaveType {
+  id                 String  @id @default(uuid()) @db.Uuid
+  code               String  @unique @db.Text
+  name               String  @db.Text
+  isPaid             Boolean @default(true) @map("is_paid")
+  accrualType        String  @default("annual") @map("accrual_type") @db.Text
+  annualEntitlement  Decimal @default(0) @map("annual_entitlement") @db.Decimal(5, 2)
+  carryForwardLimit  Decimal @default(0) @map("carry_forward_limit") @db.Decimal(5, 2)
+  maxBalance         Decimal? @map("max_balance") @db.Decimal(5, 2)
+  isEncashable       Boolean @default(false) @map("is_encashable")
+  requiresDocument   Boolean @default(false) @map("requires_document")
+  minAdvanceDays     Int     @default(0) @map("min_advance_days") @db.SmallInt
+  halfDayAllowed     Boolean @default(true) @map("half_day_allowed")
+  isActive           Boolean @default(true) @map("is_active")
+
+  policies      LeavePolicy[]
+  leaveBalances LeaveBalance[]
+  leaveRequests LeaveRequest[]
+
+  @@schema("hr")
+  @@map("leave_types")
+}
+
+model LeavePolicy {
+  id                    String   @id @default(uuid()) @db.Uuid
+  leaveTypeId           String   @map("leave_type_id") @db.Uuid
+  departmentId          String?  @map("department_id") @db.Uuid
+  employeeCategory      String?  @map("employee_category") @db.Text
+  annualOverride        Decimal? @map("annual_override") @db.Decimal(5, 2)
+  carryForwardOverride  Decimal? @map("carry_forward_override") @db.Decimal(5, 2)
+  isActive              Boolean  @default(true) @map("is_active")
+
+  leaveType LeaveType @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+
+  @@unique([leaveTypeId, departmentId, employeeCategory])
+  @@schema("hr")
+  @@map("leave_policies")
+}
+
+model LeaveBalance {
+  id          String  @id @default(uuid()) @db.Uuid
+  employeeId  String  @map("employee_id") @db.Uuid
+  leaveTypeId String  @map("leave_type_id") @db.Uuid
+  year        Int     @db.SmallInt
+  openingBal  Decimal @default(0) @map("opening_bal") @db.Decimal(6, 2)
+  accrued     Decimal @default(0) @db.Decimal(6, 2)
+  adjusted    Decimal @default(0) @db.Decimal(6, 2)
+  used        Decimal @default(0) @db.Decimal(6, 2)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  employee  Employee  @relation(fields: [employeeId], references: [id])
+  leaveType LeaveType @relation(fields: [leaveTypeId], references: [id])
+
+  @@unique([employeeId, leaveTypeId, year])
+  @@schema("hr")
+  @@map("leave_balances")
+}
+
+model LeaveRequest {
+  id                String    @id @default(uuid()) @db.Uuid
+  employeeId        String    @map("employee_id") @db.Uuid
+  leaveTypeId       String    @map("leave_type_id") @db.Uuid
+  startDate         DateTime  @map("start_date") @db.Date
+  endDate           DateTime  @map("end_date") @db.Date
+  halfDay           String?   @map("half_day") @db.Text
+  totalDays         Decimal   @map("total_days") @db.Decimal(5, 2)
+  reason            String?   @db.Text
+  status            String    @default("pending") @db.Text
+  managerId         String?   @map("manager_id") @db.Uuid
+  managerDecisionAt DateTime? @map("manager_decision_at") @db.Timestamptz()
+  hrDecisionAt      DateTime? @map("hr_decision_at") @db.Timestamptz()
+  rejectionReason   String?   @map("rejection_reason") @db.Text
+  documentUrl       String?   @map("document_url") @db.Text
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  employee  Employee  @relation(fields: [employeeId], references: [id])
+  leaveType LeaveType @relation(fields: [leaveTypeId], references: [id])
+
+  @@schema("hr")
+  @@map("leave_requests")
+}
+
+model BiometricSyncLog {
+  id                String    @id @default(uuid()) @db.Uuid
+  deviceId          String?   @map("device_id") @db.Text
+  syncStartedAt     DateTime  @default(now()) @map("sync_started_at") @db.Timestamptz()
+  syncCompletedAt   DateTime? @map("sync_completed_at") @db.Timestamptz()
+  recordsUpserted   Int       @default(0) @map("records_upserted")
+  status            String    @default("running") @db.Text
+  errorMessage      String?   @map("error_message") @db.Text
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@schema("hr")
+  @@map("biometric_sync_log")
+}
+
+model ManualCorrection {
+  id           String    @id @default(uuid()) @db.Uuid
+  employeeId   String    @map("employee_id") @db.Uuid
+  checkDate    DateTime  @map("check_date") @db.Date
+  attendanceId String?   @map("attendance_id") @db.Uuid
+  oldClockIn   DateTime? @map("old_clock_in") @db.Timestamptz()
+  oldClockOut  DateTime? @map("old_clock_out") @db.Timestamptz()
+  newClockIn   DateTime? @map("new_clock_in") @db.Timestamptz()
+  newClockOut  DateTime? @map("new_clock_out") @db.Timestamptz()
+  reason       String    @db.Text
+  correctedBy  String    @map("corrected_by") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@schema("hr")
+  @@map("manual_corrections")
+}
+
+model PfAccount {
+  id           String   @id @default(uuid()) @db.Uuid
+  employeeId   String   @unique @map("employee_id") @db.Uuid
+  employeePct  Decimal  @default(10) @map("employee_pct") @db.Decimal(5, 2)
+  employerPct  Decimal  @default(10) @map("employer_pct") @db.Decimal(5, 2)
+  enrolledDate DateTime @map("enrolled_date") @db.Date
+  balance      Decimal  @default(0) @db.Decimal(14, 2)
+  status       String   @default("active") @db.Text
+
+  employee     Employee        @relation(fields: [employeeId], references: [id])
+  transactions PfTransaction[]
+
+  @@schema("hr")
+  @@map("pf_accounts")
+}
+
+model PfTransaction {
+  id            String   @id @default(uuid()) @db.Uuid
+  pfAccountId   String   @map("pf_account_id") @db.Uuid
+  txnType       String   @map("txn_type") @db.Text
+  periodMonth   Int?     @map("period_month") @db.SmallInt
+  periodYear    Int?     @map("period_year") @db.SmallInt
+  amount        Decimal  @db.Decimal(12, 2)
+  direction     Int      @db.SmallInt
+  balanceAfter  Decimal  @map("balance_after") @db.Decimal(14, 2)
+  payrollRunId  String?  @map("payroll_run_id") @db.Uuid
+  glEntryId     String?  @map("gl_entry_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  pfAccount PfAccount @relation(fields: [pfAccountId], references: [id])
+
+  @@schema("hr")
+  @@map("pf_transactions")
+}
+
+model GratuityProvision {
+  id               String   @id @default(uuid()) @db.Uuid
+  employeeId       String   @map("employee_id") @db.Uuid
+  asOfDate         DateTime @map("as_of_date") @db.Date
+  serviceYears     Decimal  @map("service_years") @db.Decimal(5, 2)
+  lastBasic        Decimal  @map("last_basic") @db.Decimal(12, 2)
+  provisionAmount  Decimal  @map("provision_amount") @db.Decimal(14, 2)
+  cumulativeAmount Decimal  @map("cumulative_amount") @db.Decimal(14, 2)
+  periodCharge     Decimal  @map("period_charge") @db.Decimal(12, 2)
+  glEntryId        String?  @map("gl_entry_id") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@unique([employeeId, asOfDate])
+  @@schema("hr")
+  @@map("gratuity_provisions")
 }
 
 // =============================================================================

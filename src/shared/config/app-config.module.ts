@@ -7,6 +7,7 @@ import { authConfig } from './auth.config';
 import { awsConfig } from './aws.config';
 import { smsConfig } from './sms.config';
 import { procurementConfig } from './procurement.config';
+import { hrConfig } from './hr.config';
 
 import { appConfigSchema } from './app-config.schema';
 import { AppConfigService } from './app-config.service';
@@ -53,6 +54,7 @@ import { AppConfigService } from './app-config.service';
         awsConfig,
         smsConfig,
         procurementConfig,
+        hrConfig,
       ],
 
       // Combined Joi schema covering all namespaces
